@@ -22,8 +22,8 @@ Public Class frmReqSkills
         Dim SkillGroup As String = ""
         Dim CurrentNode As TreeNode = Nothing
         Dim CurrentSubNode As TreeNode = Nothing
-        Dim DisplaySkills As New EVESkillList
-        Dim TempReqComponentSkills As New EVESkillList
+        Dim DisplaySkills As New EVESkillList(UserApplicationSettings.UseActiveSkillLevels)
+        Dim TempReqComponentSkills As New EVESkillList(UserApplicationSettings.UseActiveSkillLevels)
 
         If IsNothing(SelectedBlueprint) Then
             SkillTree.Nodes.Clear()

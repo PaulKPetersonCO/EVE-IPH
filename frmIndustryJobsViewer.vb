@@ -180,7 +180,7 @@ Public Class frmIndustryJobsViewer
         ' If they don't select a character, then just clear and exit
         If lstCharacters.CheckedItems.Count = 0 Then
             lstIndustryJobs.Items.Clear()
-            Exit Sub
+            GoTo ExitSub
         End If
 
         ' Find out what characters we are querying for
@@ -376,6 +376,7 @@ Public Class frmIndustryJobsViewer
         ' Force last sort order to switch to ascending and sort by the user column
         Call ListViewColumnSorter(UserIndustryJobsColumnSettings.OrderByColumn, lstIndustryJobs, JobListColumnClicked, JobListColumnSortOrder, True)
 
+ExitSub:
         Application.UseWaitCursor = False
         gbInventionJobs.Enabled = True
         Me.Cursor = Cursors.Default
@@ -400,7 +401,7 @@ Public Class frmIndustryJobsViewer
         End If
 
         ' Now jobs and skills should show correctly
-        SQL = "SELECT CHARACTER_NAME, CORPORATION_NAME, CHARACTER_ID, "
+        SQL = "SELECT CHARACTER_NAME, CORPORATION_NAME, ECD.CHARACTER_ID, "
         SQL = SQL & "ACCESS_TOKEN, ACCESS_TOKEN_EXPIRE_DATE_TIME, REFRESH_TOKEN, TOKEN_TYPE, SCOPES, "
         SQL = SQL & "CASE WHEN RESEARCH_JOBS IS NULL THEN 0 ELSE RESEARCH_JOBS END AS RESEARCH_JOBS, "
         SQL = SQL & "CASE WHEN RESEARCH_LINES IS NULL THEN 1 ELSE RESEARCH_LINES END AS RESEARCH_LINES, "
@@ -409,13 +410,22 @@ Public Class frmIndustryJobsViewer
         SQL = SQL & "CASE WHEN REACTION_JOBS IS NULL THEN 0 ELSE REACTION_JOBS END AS REACTION_JOBS, "
         SQL = SQL & "CASE WHEN REACTION_LINES IS NULL THEN 1 ELSE REACTION_LINES END AS REACTION_LINES "
         SQL = SQL & "FROM ESI_CHARACTER_DATA AS ECD, ESI_CORPORATION_DATA AS ECPD "
-        SQL = SQL & "LEFT JOIN (SELECT SUM(SKILL_LEVEL) + 1 AS RESEARCH_LINES, CHARACTER_ID AS CHAR_ID FROM CHARACTER_SKILLS WHERE SKILL_TYPE_ID IN (3406,24624) GROUP BY CHARACTER_ID) AS I ON I.CHAR_ID = ECD.CHARACTER_ID "
-        SQL = SQL & "LEFT JOIN (SELECT installerID, COUNT(*) AS RESEARCH_JOBS FROM INDUSTRY_JOBS WHERE STATUS = 'active' AND activityID NOT IN (1,11) GROUP BY installerID) AS J ON J.installerID = CHARACTER_ID "
-        SQL = SQL & "LEFT JOIN (SELECT SUM(SKILL_LEVEL) + 1 AS INDUSTRY_LINES, CHARACTER_ID AS CHAR_ID FROM CHARACTER_SKILLS WHERE SKILL_TYPE_ID IN (3387,24625) GROUP BY CHARACTER_ID) AS K ON K.CHAR_ID = ECD.CHARACTER_ID "
-        SQL = SQL & "LEFT JOIN (SELECT installerID, COUNT(*) AS JOB_COUNT FROM INDUSTRY_JOBS WHERE STATUS = 'active' AND activityID = 1 GROUP BY installerID) AS L ON L.installerID = CHARACTER_ID "
-        SQL = SQL & "LEFT JOIN (SELECT SUM(SKILL_LEVEL) + 1 AS REACTION_LINES, CHARACTER_ID AS CHAR_ID FROM CHARACTER_SKILLS WHERE SKILL_TYPE_ID IN (45748,45749) GROUP BY CHARACTER_ID) AS M ON M.CHAR_ID = ECD.CHARACTER_ID "
-        SQL = SQL & "LEFT JOIN (SELECT installerID, COUNT(*) AS REACTION_JOBS FROM INDUSTRY_JOBS WHERE STATUS = 'active' AND activityID = 11 GROUP BY installerID) AS N ON N.installerID = CHARACTER_ID "
+        SQL = SQL & "LEFT JOIN (SELECT SUM({0}) + 1 AS RESEARCH_LINES, CHARACTER_ID FROM CHARACTER_SKILLS WHERE SKILL_TYPE_ID IN (3406,24624) GROUP BY CHARACTER_ID) AS I ON I.CHARACTER_ID = ECD.CHARACTER_ID "
+        SQL = SQL & "LEFT JOIN (SELECT installerID, COUNT(*) AS RESEARCH_JOBS FROM INDUSTRY_JOBS WHERE STATUS = 'active' AND activityID NOT IN (1,11) GROUP BY installerID) AS J ON J.installerID = ECD.CHARACTER_ID "
+        SQL = SQL & "LEFT JOIN (SELECT SUM({0}) + 1 AS INDUSTRY_LINES, CHARACTER_ID FROM CHARACTER_SKILLS WHERE SKILL_TYPE_ID IN (3387,24625) GROUP BY CHARACTER_ID) AS K ON K.CHARACTER_ID = ECD.CHARACTER_ID "
+        SQL = SQL & "LEFT JOIN (SELECT installerID, COUNT(*) AS JOB_COUNT FROM INDUSTRY_JOBS WHERE STATUS = 'active' AND activityID = 1 GROUP BY installerID) AS L ON L.installerID = ECD.CHARACTER_ID "
+        SQL = SQL & "LEFT JOIN (SELECT SUM({0}) + 1 AS REACTION_LINES, CHARACTER_ID FROM CHARACTER_SKILLS WHERE SKILL_TYPE_ID IN (45748,45749) GROUP BY CHARACTER_ID) AS M ON M.CHARACTER_ID = ECD.CHARACTER_ID "
+        SQL = SQL & "LEFT JOIN (SELECT installerID, COUNT(*) AS REACTION_JOBS FROM INDUSTRY_JOBS WHERE STATUS = 'active' AND activityID = 11 GROUP BY installerID) AS N ON N.installerID = ECD.CHARACTER_ID "
         SQL &= "WHERE ECD.CORPORATION_ID = ECPD.CORPORATION_ID AND ECD.CHARACTER_ID <> " & CStr(DummyCharacterID)
+
+        Dim SkillLevelField As String = ""
+        If UserApplicationSettings.UseActiveSkillLevels Then
+            SkillLevelField = "ACTIVE_SKILL_LEVEL"
+        Else
+            SkillLevelField = "TRAINED_SKILL_LEVEL"
+        End If
+
+        SQL = String.Format(SQL, SkillLevelField)
 
         ' Get all the characters and store them regardless so we only need to do one look up
         DBCommand = New SQLiteCommand(SQL, EVEDB.DBREf)
@@ -541,7 +551,7 @@ Public Class frmIndustryJobsViewer
         Dim CharIDs As String = ""
 
         For i = 0 To lstCharacters.CheckedItems.Count - 1
-            CharIDs = CharIDs & CStr(lstCharacters.CheckedItems(i).SubItems(5).Text) & ","
+            CharIDs = CharIDs & CStr(lstCharacters.CheckedItems(i).SubItems(6).Text) & ","
         Next
 
         ' Strip the last comma
@@ -622,7 +632,9 @@ Public Class frmIndustryJobsViewer
     End Function
 
     Private Sub frmIndustryJobsViewer_FormClosing(sender As Object, e As FormClosingEventArgs) Handles MyBase.FormClosing
+        On Error Resume Next
         myTimer.Change(Timeout.Infinite, Timeout.Infinite)
+        On Error GoTo 0
     End Sub
 
 #Region "Click events"

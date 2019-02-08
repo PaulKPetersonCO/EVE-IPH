@@ -5,7 +5,7 @@ Imports System.Threading
 Imports System.IO
 Imports System.Net
 Imports MoreLinq.MoreEnumerable
-Imports GoogleAnalyticsTracker.Simple
+Imports GoogleAnalyticsClientDotNet
 
 Public Class frmMain
     Inherits System.Windows.Forms.Form
@@ -131,6 +131,7 @@ Public Class frmMain
     Private OwnedBPPE As String
 
     Private UpdatingCheck As Boolean
+    Private UpdatingStructureIDText As Boolean
 
     ' For checks that are enabled
     Private PriceCheckT1Enabled As Boolean
@@ -192,10 +193,6 @@ Public Class frmMain
     Private MiningColumnSortType As SortOrder
     Private ReactionsColumnClicked As Integer
     Private ReactionsColumnSortType As SortOrder
-
-    ' For maximum production and laboratory lines
-    Private MaximumProductionLines As Integer
-    Private MaximumLaboratoryLines As Integer
 
     Private SelectedBPText As String = ""
 
@@ -273,10 +270,11 @@ Public Class frmMain
 
         MyBase.New()
 
+        ErrorTracker = ""
+        ESIErrorHandler = New ESIErrorProcessor()
+
         Dim ErrorData As ErrObject = Nothing
         Dim ESIData As New ESI
-
-        ErrorTracker = ""
 
         ' Set developer flag
         If File.Exists("Developer.txt") Then
@@ -301,15 +299,26 @@ Public Class frmMain
 
         FirstLoad = True
 
-        ' Use google analytics to track number of users using IPH (no user information passed outside of OS info below)
-        On Error Resume Next
-        With My.Computer.Info
-            Dim TrackerInterface As New SimpleTrackerEnvironment(.OSPlatform, .OSVersion, .OSFullName)
-            'Dim MACAddress As String = GetMacAddress() ' Use this for the User ID
-            Dim tracker As SimpleTracker = New SimpleTracker("UA-125827521-1", TrackerInterface)
-            Call tracker.TrackEventAsync("Use Tracker", "Initalized IPH", "Version: " & Application.ProductVersion, Nothing)
-        End With
-        On Error GoTo 0
+        ' See if they've disabled GA tracking
+        If Not UserApplicationSettings.DisableGATracking Then
+            ' Use google analytics to track number of users using IPH (no user information passed except MAC address for Client ID)
+            On Error Resume Next
+
+            Dim GATracker As New AnalyticsService()
+            Call GATracker.Initialize("UA-125827521-1", "EVE IPH", "EVE Isk per Hour", My.Application.Info.Version.ToString)
+
+            Dim MACAddress As String = GetMacAddress() ' Use this for the Client ID
+            Dim EventData As New ServiceModel.EventParameter
+
+            EventData.Category = "Program Usage"
+            EventData.Action = "Open IPH"
+            EventData.Label = "Initialized"
+            EventData.ClientId = HashSHA(MACAddress) ' Hash the MAC address for security
+
+            Call GATracker.TrackEvent(EventData)
+
+            On Error GoTo 0
+        End If
 
         ' Always use US for now and don't take into account user overrided stuff like the system clock format
         LocalCulture = New CultureInfo("en-US", False)
@@ -380,10 +389,6 @@ Public Class frmMain
         UserAssetWindowShoppingListSettings = AllSettings.LoadAssetWindowSettings(AssetWindow.ShoppingList)
         UserAssetWindowDefaultSettings = AllSettings.LoadAssetWindowSettings(AssetWindow.DefaultView)
 
-        ' Load the character
-        Call SetProgress("Loading Character Data from ESI...")
-        Call LoadCharacter(UserApplicationSettings.LoadAssetsonStartup, UserApplicationSettings.LoadBPsonStartup)
-
         ' Only allow selecting a character if they registered the program
         If AppRegistered() Then
             mnuSelectionAddChar.Enabled = True
@@ -391,22 +396,23 @@ Public Class frmMain
             mnuSelectionAddChar.Enabled = False
         End If
 
+        ' Display to the user any issues with ESI endpoints
+        Call SetProgress("Checking Status of ESI...")
+        Call ESIData.GetESIStatus()
+        If Not UserApplicationSettings.SupressESIStatusMessages Then
+            Call DisplayESIStatusMessages()
+        End If
+
+        ' Load the default character data
+        Call SetProgress("Loading Character Data from ESI...")
+        Call LoadCharacter(UserApplicationSettings.LoadAssetsonStartup, UserApplicationSettings.LoadBPsonStartup)
         Call LoadCharacterNamesinMenu()
 
         ' Type of skills loaded
         Call UpdateSkillPanel()
 
-        If Not IsNothing(SelectedCharacter.Skills) Then ' 3387 mass production, 24625 adv mass production, 3406 laboratory efficiency, 24524 adv laboratory operation
-            MaximumProductionLines = SelectedCharacter.Skills.GetSkillLevel(3387) + SelectedCharacter.Skills.GetSkillLevel(24625) + 1
-            MaximumLaboratoryLines = SelectedCharacter.Skills.GetSkillLevel(3406) + SelectedCharacter.Skills.GetSkillLevel(24624) + 1
-        Else
-            MaximumProductionLines = 1
-            MaximumLaboratoryLines = 1
-        End If
-
-        ' ESI Facilities
-        If UserApplicationSettings.LoadESIFacilityDataonStartup Then
-            ' Always do cost indicies first
+        ' Update System Cost Indicies
+        If UserApplicationSettings.LoadESISystemCostIndiciesDataonStartup Then
             Application.UseWaitCursor = True
             Call SetProgress("Updating Industry System Indicies...")
             Application.DoEvents()
@@ -427,15 +433,15 @@ Public Class frmMain
             Application.DoEvents()
         End If
 
-        '' Refresh Public Structures
-        'If UserApplicationSettings.LoadESIPublicStructuresonStartup Then
-        '    Application.UseWaitCursor = True
-        '    Application.DoEvents()
-        '    Call SetProgress("Updating Public Structures Data...")
-        '    Call ESIData.UpdatePublicStructureData()
-        '    Application.UseWaitCursor = False
-        '    Application.DoEvents()
-        'End If
+        ' Refresh Public Structures
+        If UserApplicationSettings.LoadESIPublicStructuresonStartup And SelectedCharacter.PublicStructuresAccess Then
+            Application.UseWaitCursor = True
+            Application.DoEvents()
+            Call SetProgress("Updating Public Structures Data...")
+            Call ESIData.UpdatePublicStructureswithMarkets()
+            Application.UseWaitCursor = False
+            Application.DoEvents()
+        End If
 
         If TestingVersion Then
             Me.Text = Me.Text & " - Testing"
@@ -574,6 +580,15 @@ Public Class frmMain
         lstManufacturedPriceProfile.Columns.Add("Solar System", 84, HorizontalAlignment.Left) ' 104 is to fit all systems
         lstManufacturedPriceProfile.Columns.Add("PMod", 41, HorizontalAlignment.Right) ' Hidden
 
+        ' If they don't have access to the correct scopes for structures, then don't enable the structure ID look up option
+        If Not SelectedCharacter.StructureMarketsAccess And Not SelectedCharacter.PublicStructuresAccess Then
+            btnAddStructureIDs.Enabled = False
+            btnViewSavedStructures.Enabled = False
+        Else
+            btnAddStructureIDs.Enabled = True
+            btnViewSavedStructures.Enabled = False
+        End If
+
         ' Tool Tips
         If UserApplicationSettings.ShowToolTips Then
             ttUpdatePrices.SetToolTip(cmbRawMatsSplitPrices, "Buy = Use Buy orders only" & vbCrLf &
@@ -592,13 +607,13 @@ Public Class frmMain
                                                             "Avg = Average" & vbCrLf &
                                                             "Med = Median" & vbCrLf &
                                                             "Percentile = 5% of the top prices (Buy) or bottom (Sell, All) ")
+            ttUpdatePrices.SetToolTip(btnAddStructureIDs, "Use to add structures you have access to using with markets for downloading prices from structures.")
         End If
 
         FirstSolarSystemComboLoad = True
         FirstPriceChargeTypesComboLoad = True
         FirstPriceShipTypesComboLoad = True
         IgnoreSystemCheckUpdates = False
-        IgnoreRegionCheckUpdates = False
 
         PriceTypeUpdate = False
         PriceSystemUpdate = False
@@ -618,6 +633,7 @@ Public Class frmMain
         PriceOrdersUpdateCount = 0
         CancelUpdatePrices = False
         CancelManufacturingTabCalc = False
+        CancelThreading = False
 
         Call InitUpdatePricesTab()
 
@@ -656,6 +672,8 @@ Public Class frmMain
 
         ' If there is an error in price updates, only show once
         ShownPriceUpdateError = False
+
+        UpdatingStructureIDText = False
 
         Call InitManufacturingTab()
 
@@ -795,7 +813,7 @@ Public Class frmMain
 
     End Sub
 
-    ' Loads up the facilities for the selectec character
+    ' Loads up the facilities for the selected character
     Public Sub LoadFacilities()
 
         ' See what ID we use for the facilities
@@ -806,13 +824,13 @@ Public Class frmMain
         Else
             CharID = CommonLoadBPsID
         End If
+        Call CalcInventionFacility.InitializeControl(FacilityView.LimitedControls, CharID, ProgramLocation.ManufacturingTab, ProductionType.Invention)
 
         ' Initialize the BP facility
         Call BPTabFacility.InitializeControl(FacilityView.FullControls, CharID, ProgramLocation.BlueprintTab, ProductionType.Manufacturing)
 
         ' Load up the Manufacturing tab facilities
         Call CalcBaseFacility.InitializeControl(FacilityView.LimitedControls, CharID, ProgramLocation.ManufacturingTab, ProductionType.Manufacturing)
-        Call CalcInventionFacility.InitializeControl(FacilityView.LimitedControls, CharID, ProgramLocation.ManufacturingTab, ProductionType.Invention)
         Call CalcT3InventionFacility.InitializeControl(FacilityView.LimitedControls, CharID, ProgramLocation.ManufacturingTab, ProductionType.T3Invention)
         Call CalcCopyFacility.InitializeControl(FacilityView.LimitedControls, CharID, ProgramLocation.ManufacturingTab, ProductionType.Copying)
         Call CalcSupersFacility.InitializeControl(FacilityView.LimitedControls, CharID, ProgramLocation.ManufacturingTab, ProductionType.SuperManufacturing)
@@ -834,6 +852,89 @@ Public Class frmMain
             Call CalcT3ShipsFacility.InitializeControl(FacilityView.LimitedControls, CharID, ProgramLocation.ManufacturingTab, ProductionType.T3CruiserManufacturing)
         End If
 
+    End Sub
+
+    ' Checks the status of ESI since last updated and displays any messageboxes on yellow or red endpoints
+    Private Sub DisplayESIStatusMessages()
+        Dim SQL As String = ""
+        Dim rsStatus As SQLiteDataReader
+
+        Dim CharacterTokenData As SavedTokenData = SelectedCharacter.CharacterTokenData
+
+        SQL = "SELECT scope, status, purpose FROM ESI_STATUS_ITEMS, ESI_ENDPOINT_ROUTE_TO_SCOPE WHERE route = endpoint_route"
+        DBCommand = New SQLiteCommand(SQL, EVEDB.DBREf)
+        rsStatus = DBCommand.ExecuteReader
+
+        While rsStatus.Read
+            ' Read through each status and show only those that they have scopes for
+            With CharacterTokenData.Scopes
+                ' Required
+                If rsStatus.GetString(0) = ESI.ESICharacterSkillsScope And rsStatus.GetString(1) <> "green" Then
+                    Call DisplayESIStatusMessage(rsStatus.GetString(1), rsStatus.GetString(0), rsStatus.GetString(2))
+                End If
+
+                ' Personal Scopes
+                If .Contains(ESI.ESICharacterIndustryJobsScope) And rsStatus.GetString(0) = ESI.ESICharacterIndustryJobsScope And rsStatus.GetString(1) <> "green" Then
+                    Call DisplayESIStatusMessage(rsStatus.GetString(1), rsStatus.GetString(0), rsStatus.GetString(2))
+                End If
+
+                If .Contains(ESI.ESICharacterStandingsScope) And rsStatus.GetString(0) = ESI.ESICharacterStandingsScope And rsStatus.GetString(1) <> "green" Then
+                    Call DisplayESIStatusMessage(rsStatus.GetString(1), rsStatus.GetString(0), rsStatus.GetString(2))
+                End If
+
+                If .Contains(ESI.ESICharacterResearchAgentsScope) And rsStatus.GetString(0) = ESI.ESICharacterResearchAgentsScope And rsStatus.GetString(1) <> "green" Then
+                    Call DisplayESIStatusMessage(rsStatus.GetString(1), rsStatus.GetString(0), rsStatus.GetString(2))
+                End If
+
+                If .Contains(ESI.ESICharacterBlueprintsScope) And rsStatus.GetString(0) = ESI.ESICharacterBlueprintsScope And rsStatus.GetString(1) <> "green" Then
+                    Call DisplayESIStatusMessage(rsStatus.GetString(1), rsStatus.GetString(0), rsStatus.GetString(2))
+                End If
+
+                If .Contains(ESI.ESICharacterAssetScope) And rsStatus.GetString(0) = ESI.ESICharacterAssetScope And rsStatus.GetString(1) <> "green" Then
+                    Call DisplayESIStatusMessage(rsStatus.GetString(1), rsStatus.GetString(0), rsStatus.GetString(2))
+                End If
+
+                ' Corporation scopes
+                If .Contains(ESI.ESICorporationMembership) And rsStatus.GetString(0) = ESI.ESICorporationMembership And rsStatus.GetString(1) <> "green" Then
+                    Call DisplayESIStatusMessage(rsStatus.GetString(1), rsStatus.GetString(0), rsStatus.GetString(2))
+                End If
+
+                If .Contains(ESI.ESICorporationIndustryJobsScope) And rsStatus.GetString(0) = ESI.ESICorporationIndustryJobsScope And rsStatus.GetString(1) <> "green" Then
+                    Call DisplayESIStatusMessage(rsStatus.GetString(1), rsStatus.GetString(0), rsStatus.GetString(2))
+                End If
+
+                If .Contains(ESI.ESICorporationBlueprintsScope) And rsStatus.GetString(0) = ESI.ESICorporationBlueprintsScope And rsStatus.GetString(1) <> "green" Then
+                    Call DisplayESIStatusMessage(rsStatus.GetString(1), rsStatus.GetString(0), rsStatus.GetString(2))
+                End If
+
+                If .Contains(ESI.ESICorporationAssetScope) And rsStatus.GetString(0) = ESI.ESICorporationAssetScope And rsStatus.GetString(1) <> "green" Then
+                    Call DisplayESIStatusMessage(rsStatus.GetString(1), rsStatus.GetString(0), rsStatus.GetString(2))
+                End If
+
+                ' Structures
+                If .Contains(ESI.ESIUniverseStructuresScope) And rsStatus.GetString(0) = ESI.ESIUniverseStructuresScope And rsStatus.GetString(1) <> "green" Then
+                    Call DisplayESIStatusMessage(rsStatus.GetString(1), rsStatus.GetString(0), rsStatus.GetString(2))
+                End If
+
+                If .Contains(ESI.ESIStructureMarketsScope) And rsStatus.GetString(0) = ESI.ESIStructureMarketsScope And rsStatus.GetString(1) <> "green" Then
+                    Call DisplayESIStatusMessage(rsStatus.GetString(1), rsStatus.GetString(0), rsStatus.GetString(2))
+                End If
+            End With
+
+
+        End While
+
+    End Sub
+
+    Private Sub DisplayESIStatusMessage(Status As String, Scope As String, Purpose As String)
+        Select Case Status
+            Case "yellow"
+                MsgBox("ESI is experincing issues with the " & Scope & " scope " & Purpose & " and you may not have access to certain data until fixed.")
+            Case "red"
+                MsgBox("The " & Scope & " ESI scope is down and will not be able to " & Purpose & ". You may not have access to certain data until fixed.")
+            Case Else
+                Application.DoEvents()
+        End Select
     End Sub
 
 #End Region
@@ -931,8 +1032,8 @@ Public Class frmMain
         ' and divide by the sum of the volumes over that time period
         SQL = "SELECT SUM(TOTAL_VOLUME_FILLED)/COUNT(PRICE_HISTORY_DATE) FROM MARKET_HISTORY "
         SQL = SQL & "WHERE TYPE_ID = " & TypeID & " AND REGION_ID = " & RegionID & " "
-        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) >= " & " DateTime('" & Format(DateAdd(DateInterval.Day, -(AvgDays + 1), Now.Date), SQLiteDateFormat) & "') "
-        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) < " & " DateTime('" & Format(Now.Date, SQLiteDateFormat) & "') "
+        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) >= " & " DateTime('" & Format(DateAdd(DateInterval.Day, -(AvgDays + 1), Date.UtcNow.Date), SQLiteDateFormat) & "') "
+        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) < " & " DateTime('" & Format(Date.UtcNow.Date, SQLiteDateFormat) & "') "
         SQL = SQL & "AND TOTAL_VOLUME_FILLED IS NOT NULL "
 
         DBCommand = New SQLiteCommand(SQL, EVEDB.DBREf)
@@ -1341,10 +1442,21 @@ Public Class frmMain
                 LoadingRelics = False
                 RelicsLoaded = False ' Allow reload on drop down
 
+                ' Check the include cost/time
+                chkBPIncludeT3Costs.Checked = InventionFacility.IncludeActivityCost
+                chkBPIncludeT3Time.Checked = InventionFacility.IncludeActivityTime
+
             Else
                 LoadingInventionDecryptors = True
                 cmbBPInventionDecryptor.Text = BPDecryptor.Name
                 LoadingInventionDecryptors = False
+
+                ' Check the include cost/time
+                chkBPIncludeInventionCosts.Checked = InventionFacility.IncludeActivityCost
+                chkBPIncludeInventionTime.Checked = InventionFacility.IncludeActivityTime
+                chkBPIncludeCopyCosts.Checked = CopyFacility.IncludeActivityCost
+                chkBPIncludeCopyTime.Checked = CopyFacility.IncludeActivityTime
+
             End If
 
             ' Need to calculate the number of bps based on the bp
@@ -1357,14 +1469,16 @@ Public Class frmMain
         End If
 
         ' We need to set each facility individually for later use
-        BPTabFacility.UpdateFacility(CType(BuildFacility.Clone, IndustryFacility))
-        BPTabFacility.UpdateFacility(CType(ComponentFacility.Clone, IndustryFacility))
-        BPTabFacility.UpdateFacility(CType(CapCompentFacility.Clone, IndustryFacility))
-        If BPTech = BPTechLevel.T2 Or BPTech = 3 Then
-            BPTabFacility.UpdateFacility(CType(InventionFacility.Clone, IndustryFacility))
-        End If
-        If BPTech = 2 Then
-            BPTabFacility.UpdateFacility(CType(CopyFacility.Clone, IndustryFacility))
+        If SentFrom <> SentFromLocation.ShoppingList Then ' shopping list doesn't send facilities so just use what is already loaded on bp tab
+            BPTabFacility.UpdateFacility(CType(BuildFacility.Clone, IndustryFacility))
+            BPTabFacility.UpdateFacility(CType(ComponentFacility.Clone, IndustryFacility))
+            BPTabFacility.UpdateFacility(CType(CapCompentFacility.Clone, IndustryFacility))
+            If BPTech = BPTechLevel.T2 Or BPTech = 3 Then
+                BPTabFacility.UpdateFacility(CType(InventionFacility.Clone, IndustryFacility))
+            End If
+            If BPTech = 2 Then
+                BPTabFacility.UpdateFacility(CType(CopyFacility.Clone, IndustryFacility))
+            End If
         End If
 
         ' Common to all settings
@@ -1601,6 +1715,12 @@ Public Class frmMain
 
     End Sub
 
+    Private Sub mnuViewESIStatus_Click(sender As Object, e As EventArgs) Handles mnuViewESIStatus.Click
+        Dim f1 As New frmESIStatus
+
+        f1.Show()
+    End Sub
+
     Private Sub mnuIndustryUpgradeBelts_Click(sender As System.Object, e As System.EventArgs) Handles mnuIndustryUpgradeBelts.Click
         Dim f1 As New frmIndustryBeltFlip
 
@@ -1775,6 +1895,8 @@ Public Class frmMain
         ' Simple update, just set all the data back to zero
         Call EVEDB.ExecuteNonQuerySQL("DELETE FROM MARKET_ORDERS_UPDATE_CACHE")
         Call EVEDB.ExecuteNonQuerySQL("DELETE FROM MARKET_ORDERS")
+        Call EVEDB.ExecuteNonQuerySQL("DELETE FROM STRUCTURE_MARKET_ORDERS_UPDATE_CACHE")
+        Call EVEDB.ExecuteNonQuerySQL("DELETE FROM STRUCTURE_MARKET_ORDERS")
 
         MsgBox("Market Orders reset", vbInformation, Application.ProductName)
 
@@ -2052,6 +2174,18 @@ Public Class frmMain
 
     End Sub
 
+    Private Sub mnuChangeDummyCharacterName_Click(sender As Object, e As EventArgs) Handles mnuChangeDummyCharacterName.Click
+        Dim f1 As New frmChangeDummyCharacter
+
+        f1.ShowDialog()
+
+        If SelectedCharacter.ID = DummyCharacterID Then
+            ' Reload with new information
+            SelectedCharacter.LoadDefaultCharacter(False, False, True)
+            Call LoadCharacterNamesinMenu()
+        End If
+    End Sub
+
     Private Sub mnuItemUpdatePrices_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles mnuItemUpdatePrices.Click
         Dim f1 = New frmManualPriceUpdate
         f1.ShowDialog()
@@ -2258,15 +2392,6 @@ Public Class frmMain
 
         ' Update skill override
         Call UpdateSkillPanel()
-
-        ' New Char so load the max lines
-        If Not IsNothing(SelectedCharacter.Skills) Then ' 3387 mass production, 24625 adv mass production, 3406 laboratory efficiency, 24524 adv laboratory operation
-            MaximumProductionLines = SelectedCharacter.Skills.GetSkillLevel(3387) + SelectedCharacter.Skills.GetSkillLevel(24525) + 1
-            MaximumLaboratoryLines = SelectedCharacter.Skills.GetSkillLevel(3406) + SelectedCharacter.Skills.GetSkillLevel(24524) + 1
-        Else
-            MaximumProductionLines = 1
-            MaximumLaboratoryLines = 1
-        End If
 
         Me.Cursor = Cursors.Default
 
@@ -2486,7 +2611,7 @@ Public Class frmMain
         Application.UseWaitCursor = True
         Call f1.Show()
         Application.DoEvents()
-        If ESIData.UpdatePublicStructureData(f1.lblStatus, f1.pgStatus) Then
+        If ESIData.UpdatePublicStructureswithMarkets(f1.lblStatus, f1.pgStatus) Then
             MsgBox("Public Structure Data Updated", vbInformation, Application.ProductName)
         End If
 
@@ -3268,7 +3393,7 @@ Tabs:
 
     Private Sub txtBPLines_DoubleClick(sender As Object, e As System.EventArgs) Handles txtBPLines.DoubleClick
         ' Enter the max lines we have
-        txtBPLines.Text = CStr(MaximumProductionLines)
+        txtBPLines.Text = CStr(SelectedCharacter.MaximumProductionLines)
     End Sub
 
     Private Sub txtBPLines_KeyDown(sender As Object, e As System.Windows.Forms.KeyEventArgs) Handles txtBPLines.KeyDown
@@ -3290,7 +3415,7 @@ Tabs:
 
     Private Sub txtBPInventionLines_DoubleClick(sender As Object, e As System.EventArgs) Handles txtBPInventionLines.DoubleClick
         ' Enter the max lines we have
-        txtBPInventionLines.Text = CStr(MaximumLaboratoryLines)
+        txtBPInventionLines.Text = CStr(SelectedCharacter.MaximumLaboratoryLines)
     End Sub
 
     Private Sub txtBPInventionLines_KeyDown(sender As Object, e As System.Windows.Forms.KeyEventArgs) Handles txtBPInventionLines.KeyDown
@@ -3312,7 +3437,7 @@ Tabs:
 
     Private Sub txtBPRelicLines_DoubleClick(sender As Object, e As System.EventArgs)
         ' Enter the max lines we have
-        txtBPRelicLines.Text = CStr(MaximumLaboratoryLines)
+        txtBPRelicLines.Text = CStr(SelectedCharacter.MaximumLaboratoryLines)
     End Sub
 
     Private Sub txtBPRelicLines_KeyDown(sender As Object, e As System.Windows.Forms.KeyEventArgs)
@@ -3874,66 +3999,56 @@ Tabs:
 
     Private Sub btnCopyMatstoClip_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles btnBPCopyMatstoClip.Click
         Dim ClipboardData = New DataObject
-        Dim OutputText As String
+        Dim OutputText As String = ""
         Dim DecryptorText As String = ""
         Dim RelicText As String = ""
         Dim AddlText As String = ""
+        Dim ExportFormat As String = ""
+
+        If cmbBPInventionDecryptor.Text <> None Then
+            DecryptorText = "Decryptor: " & cmbBPInventionDecryptor.Text
+        End If
+
+        If cmbBPRelic.Text <> None Then
+            RelicText = "Relic: " & cmbBPRelic.Text
+        End If
+
+        If RelicText <> "" Then
+            AddlText = ", " & RelicText
+        Else
+            ' Decryptor
+            If DecryptorText <> "" Then
+                AddlText = ", " & DecryptorText
+            End If
+        End If
+
+        AddlText = ")" & Environment.NewLine & Environment.NewLine
 
         If chkBPSimpleCopy.Checked = False Then
-            If cmbBPInventionDecryptor.Text <> None Then
-                DecryptorText = "Decryptor: " & cmbBPInventionDecryptor.Text
-            End If
-
-            If cmbBPRelic.Text <> None Then
-                RelicText = "Relic: " & cmbBPRelic.Text
-            End If
-
-            If RelicText <> "" Then
-                AddlText = ", " & RelicText
-            Else
-                ' Decryptor
-                If DecryptorText <> "" Then
-                    AddlText = ", " & DecryptorText
-                End If
-            End If
-
-            AddlText = ")" & Environment.NewLine & Environment.NewLine
-
-            If rbtnBPRawmatCopy.Checked Or chkBPBuildBuy.Checked Then
-                OutputText = "Raw Material List for " & txtBPRuns.Text & " Units of '" & cmbBPBlueprintSelection.Text & "' (ME: " & CStr(txtBPME.Text) & AddlText
-                OutputText = OutputText & SelectedBlueprint.GetRawMaterials.GetClipboardList(UserApplicationSettings.DataExportFormat, False, False, False, UserApplicationSettings.IncludeInGameLinksinCopyText)
-            Else
-                OutputText = "Component Material List for " & txtBPRuns.Text & " Units of '" & cmbBPBlueprintSelection.Text & "' (ME: " & CStr(txtBPME.Text) & AddlText
-                OutputText = OutputText & SelectedBlueprint.GetComponentMaterials.GetClipboardList(UserApplicationSettings.DataExportFormat, False, False, False, UserApplicationSettings.IncludeInGameLinksinCopyText)
-            End If
-
-            If UserApplicationSettings.ShopListIncludeInventMats Then
-                If Not IsNothing(SelectedBlueprint.GetInventionMaterials.GetMaterialList) Then
-                    OutputText = OutputText & Environment.NewLine & Environment.NewLine & "Invention Materials" & Environment.NewLine & Environment.NewLine
-                    OutputText = OutputText & SelectedBlueprint.GetInventionMaterials.GetClipboardList(UserApplicationSettings.DataExportFormat, False, False, False, UserApplicationSettings.IncludeInGameLinksinCopyText)
-                End If
-            End If
+            ExportFormat = UserApplicationSettings.DataExportFormat
         Else
-            ' Just copy the materials for use in evepraisal etc.
-            OutputText = ""
-            If (chkBPBuildBuy.Checked And rbtnBPCopyInvREMats.Checked = False) Or rbtnBPRawmatCopy.Checked Then
-                For i = 0 To SelectedBlueprint.GetRawMaterials.GetMaterialList.Count - 1
-                    OutputText += String.Format("{0} {1}{2}", SelectedBlueprint.GetRawMaterials.GetMaterialList(i).GetMaterialName(), SelectedBlueprint.GetRawMaterials.GetMaterialList(i).GetQuantity(), vbCrLf)
-                Next
-            ElseIf rbtnBPComponentCopy.Checked And rbtnBPCopyInvREMats.Checked = False Then
-                For i = 0 To SelectedBlueprint.GetComponentMaterials.GetMaterialList.Count - 1
-                    OutputText += String.Format("{0} {1}{2}", SelectedBlueprint.GetComponentMaterials.GetMaterialList(i).GetMaterialName(), SelectedBlueprint.GetComponentMaterials.GetMaterialList(i).GetQuantity(), vbCrLf)
-                Next
-            End If
+            ExportFormat = SimpleDataExport
+        End If
 
-            If UserApplicationSettings.ShopListIncludeInventMats Or rbtnBPCopyInvREMats.Checked Then
-                If Not IsNothing(SelectedBlueprint.GetInventionMaterials.GetMaterialList) Then
-                    For i = 0 To SelectedBlueprint.GetInventionMaterials.GetMaterialList.Count - 1
-                        OutputText += String.Format("{0} {1}{2}", SelectedBlueprint.GetInventionMaterials.GetMaterialList(i).GetMaterialName(), SelectedBlueprint.GetInventionMaterials.GetMaterialList(i).GetQuantity(), vbCrLf)
-                    Next
+        If rbtnBPRawmatCopy.Checked Or chkBPBuildBuy.Checked Then
+            If chkBPSimpleCopy.Checked = False Then
+                OutputText = "Raw Material List for " & txtBPRuns.Text & " Units of '" & cmbBPBlueprintSelection.Text & "' (ME: " & CStr(txtBPME.Text) & AddlText
+            End If
+            OutputText = OutputText & SelectedBlueprint.GetRawMaterials.GetClipboardList(ExportFormat, False, False, False, UserApplicationSettings.IncludeInGameLinksinCopyText)
+        Else
+            If chkBPSimpleCopy.Checked = False Then
+                OutputText = "Component Material List for " & txtBPRuns.Text & " Units of '" & cmbBPBlueprintSelection.Text & "' (ME: " & CStr(txtBPME.Text) & AddlText
+            End If
+            OutputText = OutputText & SelectedBlueprint.GetComponentMaterials.GetClipboardList(ExportFormat, False, False, False, UserApplicationSettings.IncludeInGameLinksinCopyText)
+        End If
+
+        If UserApplicationSettings.ShopListIncludeInventMats Then
+            If Not IsNothing(SelectedBlueprint.GetInventionMaterials.GetMaterialList) Then
+                If chkBPSimpleCopy.Checked = False Then
+                    OutputText = OutputText & Environment.NewLine & Environment.NewLine & "Invention Materials" & Environment.NewLine & Environment.NewLine
                 End If
+                OutputText = OutputText & SelectedBlueprint.GetInventionMaterials.GetClipboardList(ExportFormat, False, False, False, UserApplicationSettings.IncludeInGameLinksinCopyText)
             End If
-
         End If
 
         ' Paste to clipboard
@@ -4061,6 +4176,10 @@ Tabs:
         If rbtnBPFavoriteBlueprints.Checked Then
             Call ResetBlueprintCombo(True, True, True, True, True, True)
         End If
+    End Sub
+
+    Private Sub chkBPNPCBPOs_CheckedChanged(sender As Object, e As EventArgs) Handles chkBPNPCBPOs.CheckedChanged
+        Call ResetBlueprintCombo(True, True, True, True, True, True)
     End Sub
 
     Private Sub chkbpT1_CheckedChanged(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles chkBPT1.CheckedChanged
@@ -4313,7 +4432,7 @@ Tabs:
             End If
 
             With BPTabFacility
-                Call LoadBPfromEvent(BPID, BuildType, "Raw", SentFromLocation.BlueprintTab,
+                Call LoadBPfromEvent(BPID, BuildType, None, SentFromLocation.BlueprintTab,
                                     .GetSelectedManufacturingFacility(GroupID, CategoryID, SelectedActivity), .GetFacility(ProductionType.ComponentManufacturing),
                                     .GetFacility(ProductionType.CapitalComponentManufacturing),
                                     .GetSelectedInventionFacility(GroupID, CategoryID), .GetFacility(ProductionType.Copying),
@@ -4479,7 +4598,8 @@ Tabs:
                     End If
                 Case Keys.Enter
                     If (lstBPList.SelectedIndex > -1) Then
-                        cmbBPBlueprintSelection.Text = lstBPList.SelectedItem.ToString()
+                        SelectedBPText = lstBPList.SelectedItem.ToString()
+                        cmbBPBlueprintSelection.Text = SelectedBPText
                         lstBPList.Visible = False
                         BPSelected = True
                         Call SelectBlueprint()
@@ -4507,7 +4627,8 @@ Tabs:
     ' Loads the item by clicking on the item selected
     Private Sub lstBPList_MouseDown(sender As Object, e As MouseEventArgs) Handles lstBPList.MouseDown
         If lstBPList.SelectedItems.Count <> 0 Then
-            cmbBPBlueprintSelection.Text = lstBPList.SelectedItem.ToString()
+            SelectedBPText = lstBPList.SelectedItem.ToString()
+            cmbBPBlueprintSelection.Text = SelectedBPText
             lstBPList.Visible = False
             Call SelectBlueprint()
             cmbBPBlueprintSelection.Focus()
@@ -4543,8 +4664,8 @@ Tabs:
             If Me.rbtnBPOwnedBlueprints.Checked Or Me.rbtnBPFavoriteBlueprints.Checked Then
                 SQL = BuildBPSelectQuery()
             Else
-                SQL = "SELECT ALL_BLUEPRINTS.BLUEPRINT_NAME, REPLACE(LOWER(BLUEPRINT_NAME),'''','') AS X FROM ALL_BLUEPRINTS, INVENTORY_TYPES "
-                SQL = SQL & "WHERE ALL_BLUEPRINTS.ITEM_ID = INVENTORY_TYPES.typeID "
+                SQL = "SELECT ALL_BLUEPRINTS.BLUEPRINT_NAME, REPLACE(LOWER(BLUEPRINT_NAME),'''','') AS X FROM ALL_BLUEPRINTS, INVENTORY_TYPES AS IT, INVENTORY_TYPES AS IT2 "
+                SQL = SQL & "WHERE ALL_BLUEPRINTS.ITEM_ID = IT.typeID AND ALL_BLUEPRINTS.BLUEPRINT_ID = IT2.typeID "
                 SQL = SQL & BuildBPSelectQuery()
             End If
 
@@ -4664,17 +4785,17 @@ Tabs:
             ElseIf .rbtnBPRigBlueprints.Checked Then
                 SQL = SQL & "AND BLUEPRINT_GROUP LIKE '%Rig Blueprint' "
             ElseIf .rbtnBPOwnedBlueprints.Checked Then
-                SQL = "SELECT ALL_BLUEPRINTS.BLUEPRINT_NAME, REPLACE(LOWER(ALL_BLUEPRINTS.BLUEPRINT_NAME),'''','') AS X FROM ALL_BLUEPRINTS, INVENTORY_TYPES, "
+                SQL = "SELECT ALL_BLUEPRINTS.BLUEPRINT_NAME, REPLACE(LOWER(ALL_BLUEPRINTS.BLUEPRINT_NAME),'''','') AS X FROM ALL_BLUEPRINTS, INVENTORY_TYPES AS IT, INVENTORY_TYPES AS IT2, "
                 SQL = SQL & "OWNED_BLUEPRINTS WHERE OWNED <> 0 "
                 SQL = SQL & "AND OWNED_BLUEPRINTS.USER_ID IN (" & CharID & "," & SelectedCharacter.CharacterCorporation.CorporationID & ") "
                 SQL = SQL & "AND ALL_BLUEPRINTS.BLUEPRINT_ID = OWNED_BLUEPRINTS.BLUEPRINT_ID "
-                SQL = SQL & "AND ALL_BLUEPRINTS.ITEM_ID = INVENTORY_TYPES.typeID "
+                SQL = SQL & "AND ALL_BLUEPRINTS.ITEM_ID = IT.typeID AND ALL_BLUEPRINTS.BLUEPRINT_ID = IT2.typeID "
             ElseIf .rbtnBPFavoriteBlueprints.Checked Then
-                SQL = "Select ALL_BLUEPRINTS.BLUEPRINT_NAME, REPLACE(LOWER(ALL_BLUEPRINTS.BLUEPRINT_NAME),'''','') AS X FROM ALL_BLUEPRINTS, INVENTORY_TYPES, "
+                SQL = "Select ALL_BLUEPRINTS.BLUEPRINT_NAME, REPLACE(LOWER(ALL_BLUEPRINTS.BLUEPRINT_NAME),'''','') AS X FROM ALL_BLUEPRINTS, INVENTORY_TYPES AS IT, INVENTORY_TYPES AS IT2, "
                 SQL = SQL & "OWNED_BLUEPRINTS WHERE OWNED <> 0 "
                 SQL = SQL & "AND OWNED_BLUEPRINTS.USER_ID IN (" & CharID & "," & SelectedCharacter.CharacterCorporation.CorporationID & ") "
                 SQL = SQL & "AND ALL_BLUEPRINTS.BLUEPRINT_ID = OWNED_BLUEPRINTS.BLUEPRINT_ID AND FAVORITE = 1 "
-                SQL = SQL & "AND ALL_BLUEPRINTS.ITEM_ID = INVENTORY_TYPES.typeID "
+                SQL = SQL & "AND ALL_BLUEPRINTS.ITEM_ID = IT.typeID AND ALL_BLUEPRINTS.BLUEPRINT_ID = IT2.typeID "
             End If
         End With
 
@@ -4757,7 +4878,13 @@ Tabs:
             SizesClause = " AND SIZE_GROUP IN (" & SizesClause.Substring(0, Len(SizesClause) - 1) & ") "
         End If
 
-        SQL = SQL & SizesClause
+        Dim NPCBPOsClause As String = ""
+
+        If chkBPNPCBPOs.Checked Then
+            NPCBPOsClause = " AND IT2.marketGroupID IS NOT NULL AND ITEM_TYPE <> 2 " ' Take T2 bps off the list too if they select only NPC even though they show up on the market, no NPC sells them
+        End If
+
+        SQL = SQL & SizesClause & NPCBPOsClause
 
         '' Ignore flag
         'If chkBPIncludeIgnoredBPs.Checked = False Then
@@ -4942,6 +5069,7 @@ Tabs:
 
             'chkBPIncludeIgnoredBPs.Checked = .IncludeIgnoredBPs
             chkBPSimpleCopy.Checked = .SimpleCopyCheck
+            chkBPNPCBPOs.Checked = .NPCBPOS
 
             chkBPSmall.Checked = .SmallCheck
             chkBPMedium.Checked = .MediumCheck
@@ -5172,6 +5300,7 @@ Tabs:
 
             ' .IncludeIgnoredBPs = chkBPIncludeIgnoredBPs.Checked
             .SimpleCopyCheck = chkBPSimpleCopy.Checked
+            .NPCBPOs = chkBPNPCBPOs.Checked
 
             .SmallCheck = chkBPSmall.Checked
             .MediumCheck = chkBPMedium.Checked
@@ -5380,13 +5509,13 @@ Tabs:
         readerBP.Close()
 
         ' Load the facilty based on the groupid and categoryid
-        Call BPTabFacility.LoadFacility(BPID, ItemGroupID, ItemCategoryID, TempTech, False)
+        Call BPTabFacility.LoadFacility(BPID, ItemGroupID, ItemCategoryID, TempTech, False, False, False)
 
         ' Load the image
         Call LoadBlueprintPicture(BPID, ItemType)
 
-        ' Set for max production lines - bp tab or history (bp tab)
-        If SentFrom = SentFromLocation.History Or SentFrom = SentFromLocation.BlueprintTab Then ' We might have different values there and they set on double click
+        ' Set for max production lines 
+        If SentFrom = SentFromLocation.None Then ' We might have different values there and they set on double click
             ' Reset the entry boxes
             txtBPRuns.Text = "1"
             txtBPNumBPs.Text = "1"
@@ -5397,7 +5526,7 @@ Tabs:
 
             Call ResetDecryptorCombos(TempTech)
 
-        ElseIf SentFrom <> SentFromLocation.None Then  ' Sent from manufacturing tab or shopping list
+        ElseIf SentFrom <> SentFromLocation.None Then  ' Sent from manufacturing tab, bp tab, history, or shopping list
             ' Set up for Reloading the decryptor combo on T2/T3
             ' Allow reloading of Decryptors
             InventionDecryptorsLoaded = False
@@ -5538,8 +5667,8 @@ Tabs:
 
         cmbBPBlueprintSelection.Focus()
 
-        ' Reset the combo for invention, and Load the relic types for BP selected for T3
-        If NewBP Then
+        ' Reset the combo for invention, and Load the relic types for BP selected for T3 - If sent from, then it's set there
+        If NewBP And SentFrom = SentFromLocation.None Then
             Dim TempDName As String = ""
             If TempBPType = BPType.InventedBPC Or TempBPType = BPType.Copy Then
                 ' Load the decryptor based on ME/TE
@@ -7275,13 +7404,12 @@ ExitForm:
     Private Sub ClearAllRegionChecks(ByVal Index As Integer)
         Dim i As Integer
 
-        If Not IgnoreRegionCheckUpdates Then
-            For i = 1 To RegionCheckBoxes.Length - 1
-                If i <> Index Then
-                    RegionCheckBoxes(i).Checked = False
-                End If
-            Next i
-        End If
+        For i = 1 To RegionCheckBoxes.Length - 1
+            If i <> Index Then
+                RegionCheckBoxes(i).Checked = False
+            End If
+        Next i
+
     End Sub
 
     Private Sub cmbPriceShipTypes_DropDown(sender As Object, e As System.EventArgs) Handles cmbPriceShipTypes.DropDown
@@ -8452,7 +8580,7 @@ ExitForm:
 
         SQL = "SELECT solarSystemName FROM SOLAR_SYSTEMS, REGIONS "
         SQL = SQL & "WHERE SOLAR_SYSTEMS.regionID = REGIONS.regionID "
-        SQL = SQL & "AND REGIONS.regionName = '" & Region & "'"
+        SQL = SQL & "AND REGIONS.regionName = '" & Region & "' ORDER BY solarSystemName"
 
         DBCommand = New SQLiteCommand(SQL, EVEDB.DBREf)
         rsData = DBCommand.ExecuteReader
@@ -8696,6 +8824,7 @@ ExitForm:
             .PPItemsRegion = cmbItemsDefaultsRegion.Text
             .PPItemsSystem = cmbItemsDefaultsSystem.Text
             .PPItemsPriceMod = CDbl(txtItemsDefaultsPriceMod.Text.Replace("%", "")) / 100
+
         End With
 
         TempSettings.ColumnSort = UpdatePricesColumnClicked
@@ -8730,6 +8859,13 @@ ExitForm:
         Call ListClicked(lstManufacturedPriceProfile, sender, e)
     End Sub
 
+    Private Sub btnAddStructureIDs_Click(sender As Object, e As EventArgs) Handles btnAddStructureIDs.Click
+        Dim f1 As New frmAddStructureIDs
+
+        f1.ShowDialog()
+
+    End Sub
+
     ' Sets the price profile defaults for anything with ID = 0
     Private Sub SetPriceProfileDefaults(PriceType As String, PriceRegion As String, PriceSystem As String, PriceMod As String, RawMat As Boolean)
         Dim SQL As String = ""
@@ -8762,6 +8898,7 @@ ExitForm:
         Dim TempItem As PriceItem
         Dim SearchRegion As String = ""
         Dim SearchSystem As String = ""
+        Dim SearchStructureID As String = ""
         Dim NumSystems As Integer = 0
 
         RegionChecked = False
@@ -8827,7 +8964,7 @@ ExitForm:
         pnlStatus.Text = "Initializing Query..."
         Application.DoEvents()
 
-        ' Find the checked region
+        ' Find the checked region 
         If rbtnPriceSettingSingleSelect.Checked Then
             If RegionChecked Then
                 For i = 1 To (RegionCheckBoxes.Length - 1)
@@ -8904,6 +9041,7 @@ ExitForm:
                     If rbtnPriceSettingSingleSelect.Checked Then
                         TempItem.RegionID = SearchRegion
                         TempItem.SystemID = SearchSystem
+                        TempItem.StructureID = SearchStructureID
                         If TempItem.Manufacture Then
                             TempItem.PriceType = cmbItemsSplitPrices.Text
                             TempItem.PriceModifier = CDbl(txtItemsPriceModifier.Text.Replace("%", "")) / 100
@@ -8978,18 +9116,20 @@ ExitSub:
         Dim RegionList As String
         Dim SelectedPrice As Double
         Dim MP As New MarketPriceInterface(pnlProgressBar)
-
+        Dim ESIData As New ESI
+        Dim ItemTypeIDs = New List(Of String)
+        Dim RegionID As String = ""
+        Dim PriceRegions As New List(Of String)
         Dim PriceType As String = "" ' Default
+        Dim Items As New List(Of TypeIDRegion)
 
         ' Use CCP Data
         If rbtnPriceSourceCCPData.Checked Then
-            Dim Items As New List(Of TypeIDRegion)
             ' Loop through each item and set it's pair for query
             For i = 0 To SentItems.Count - 1
                 Dim Temp As New TypeIDRegion
                 Temp.TypeIDs.Add(CStr(SentItems(i).TypeID))
 
-                Dim RegionID As String
                 ' Look up regionID since we can only look up regions in ESI
                 If SentItems(i).SystemID <> "" Then
                     DBCommand = New SQLiteCommand("SELECT regionID FROM SOLAR_SYSTEMS WHERE solarsystemID = '" & SentItems(i).SystemID & "'", EVEDB.DBREf)
@@ -8997,6 +9137,7 @@ ExitSub:
                     readerPrices.Read()
                     RegionID = CStr(readerPrices.GetInt64(0))
                     readerPrices.Close()
+                    DBCommand = Nothing
                 Else
                     ' for ESI, only one region per update
                     RegionID = SentItems(i).RegionID
@@ -9005,33 +9146,60 @@ ExitSub:
                 ' Set the region
                 Temp.RegionString = RegionID
 
-                DBCommand = Nothing
+                ' Save the ItemID in the list
+                ItemTypeIDs.Add(CStr(SentItems(i).TypeID))
+                ' Save the regionID in the list
+                If Not PriceRegions.Contains(RegionID) Then
+                    PriceRegions.Add(RegionID)
+                End If
 
+                ' Save the item with the region on it
                 Items.Add(Temp)
             Next
 
             pnlStatus.Text = "Downloading Station Prices..."
 
             ' Update the ESI prices cache
-            If Not MP.UpdateMarketOrders(Items) Then
+            If Not MP.UpdateESIMarketOrders(Items) Then
                 ' Update Failed, don't reload everything
                 Call MsgBox("Some prices did not update from stations. Please try again.", vbInformation, Application.ProductName)
                 pnlStatus.Text = ""
                 Exit Sub
             End If
-            pnlStatus.Text = ""
 
-            ' Now, based on the region, select the public upwell structures and get each set of market data from those
-            pnlStatus.Text = "Downloading Structure Prices..."
-
-            If Not MP.UpdateMarketOrders(Items) Then
-                ' Update Failed, don't reload everything
-                Call MsgBox("Some prices did not update from public structures. Please try again.", vbInformation, Application.ProductName)
-                pnlStatus.Text = ""
+            If CancelThreading Then
+                ' They had a ton of errors
+                Call MsgBox("You had an excessive amount of errors while attempting to update station orders and the process was canceled. Please try again later.", vbCritical, Application.ProductName)
+                CancelThreading = False
                 Exit Sub
             End If
-            pnlStatus.Text = ""
 
+            pnlStatus.Text = ""
+            Application.DoEvents()
+
+            ' Now, based on the region and selected items, select the public upwell structures and get each set of market data from those
+            If SelectedCharacter.StructureMarketsAccess And SelectedCharacter.PublicStructuresAccess And Not CancelUpdatePrices Then
+                pnlStatus.Text = "Downloading Public Structure Prices..."
+
+                ' First, make sure we have structures in the table to query
+                Call ESIData.UpdatePublicStructureswithMarkets()
+
+                If Not ESIData.UpdateStructureMarketOrders(PriceRegions, SelectedCharacter.CharacterTokenData, pnlProgressBar) Then
+                    ' Update Failed, don't reload everything
+                    Call MsgBox("Some prices did not update from public structures. Please try again.", vbInformation, Application.ProductName)
+                    pnlStatus.Text = ""
+                    Exit Sub
+                End If
+
+                If CancelThreading Then
+                    ' They had a ton of errors
+                    Call MsgBox("You had an excessive amount of errors while attempting to update structure orders and the process was canceled. Please try again later.", vbCritical, Application.ProductName)
+                    CancelThreading = False
+                    Exit Sub
+                End If
+
+                pnlStatus.Text = ""
+            End If
         Else
             ' Update the EVE Marketer cache
             If Not UpdatePricesCache(SentItems) Then
@@ -9050,6 +9218,11 @@ ExitSub:
         pnlProgressBar.Visible = True
 
         Application.DoEvents()
+
+        If EVEDB.TransactionActive And CancelUpdatePrices Then
+            ' We Canceled the update so rollback anything
+            EVEDB.RollbackSQLiteTransaction()
+        End If
 
         Call EVEDB.BeginSQLiteTransaction()
 
@@ -9094,7 +9267,8 @@ ExitSub:
                 Dim LimittoBuy As Boolean = False
                 Dim LimittoSell As Boolean = False
                 Dim SystemID As String = ""
-                Dim RegionID As String = ""
+
+                RegionID = ""
 
                 If SentItems(i).SystemID <> "" Then
                     SystemID = RegionList
@@ -9133,8 +9307,8 @@ ExitSub:
                         SQL = SQL & CalcPercentile(SentItems(i).TypeID, RegionID, SystemID, False)
                 End Select
 
-                ' Set the main from etc
-                SQL = SQL & " FROM MARKET_ORDERS WHERE TYPE_ID = " & CStr(SentItems(i).TypeID) & " "
+                ' Set the main from using both price locations
+                SQL = SQL & " FROM (SELECT * FROM MARKET_ORDERS UNION ALL SELECT * FROM STRUCTURE_MARKET_ORDERS) WHERE TYPE_ID = " & CStr(SentItems(i).TypeID) & " "
                 ' If they want a system, then limit all the data to that system id
                 If SentItems(i).SystemID <> "" Then
                     SQL = SQL & "AND SOLAR_SYSTEM_ID = " & RegionList & " "
@@ -9235,7 +9409,7 @@ ExitSub:
         Dim rsData As SQLiteDataReader
         Dim PriceList As New List(Of Double)
 
-        SQL = "SELECT PRICE FROM MARKET_ORDERS WHERE TYPE_ID = " & CStr(TypeID) & " "
+        SQL = "SELECT PRICE FROM (SELECT * FROM MARKET_ORDERS UNION ALL SELECT * FROM STRUCTURE_MARKET_ORDERS) WHERE TYPE_ID = " & CStr(TypeID) & " "
         If SystemID <> "" Then
             SQL = SQL & "AND SOLAR_SYSTEM_ID = " & SystemID & " "
         Else
@@ -9376,7 +9550,7 @@ ExitSub:
 
     End Function
 
-    ' Adds prices for each type id and region to the cache by using the (my) EVE Central API Wrapper Class. 
+    ' Adds prices for each type id and region to the cache 
     Private Function UpdatePricesCache(ByVal CacheItems As List(Of PriceItem)) As Boolean
         Dim TypeIDUpdatePriceList As New List(Of Long)
         Dim i As Integer
@@ -9402,6 +9576,7 @@ ExitSub:
         End If
 
         pnlProgressBar.Visible = True
+        CancelUpdatePrices = False
 
         pnlStatus.Text = "Checking Items..."
         Application.DoEvents()
@@ -10219,6 +10394,13 @@ ExitSub:
 
     End Sub
 
+    Private Sub btnViewSavedStructures_Click(sender As Object, e As EventArgs) Handles btnViewSavedStructures.Click
+        If frmViewStructures.Visible = False Then
+            frmViewStructures = New frmViewSavedStructures
+            frmViewStructures.Show()
+        End If
+    End Sub
+
 #End Region
 
 #Region "Manufacturing"
@@ -10336,7 +10518,7 @@ CheckTechs:
 
     Private Sub txtCalcProdLines_DoubleClick(sender As Object, e As System.EventArgs) Handles txtCalcProdLines.DoubleClick
         ' Enter the max lines we have
-        txtCalcProdLines.Text = CStr(MaximumProductionLines)
+        txtCalcProdLines.Text = CStr(SelectedCharacter.MaximumProductionLines)
     End Sub
 
     Private Sub txtCalcProdLines_KeyPress(sender As Object, e As System.Windows.Forms.KeyPressEventArgs) Handles txtCalcProdLines.KeyPress
@@ -10377,7 +10559,7 @@ CheckTechs:
 
     Private Sub txtCalcLabLines_DoubleClick(sender As Object, e As System.EventArgs) Handles txtCalcLabLines.DoubleClick
         ' Enter the max lab lines we have
-        txtCalcLabLines.Text = CStr(MaximumLaboratoryLines)
+        txtCalcLabLines.Text = CStr(SelectedCharacter.MaximumLaboratoryLines)
     End Sub
 
     Private Sub txtCalcLabLines_KeyPress(sender As Object, e As System.Windows.Forms.KeyPressEventArgs) Handles txtCalcLabLines.KeyPress
@@ -10710,6 +10892,14 @@ CheckTechs:
     End Sub
 
     Private Sub chkCalcPirateFaction_CheckedChanged(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles chkCalcPirateFaction.CheckedChanged
+        If Not FirstManufacturingGridLoad Then
+            FirstLoadCalcBPTypes = True
+            cmbCalcBPTypeFilter.Text = "All Types"
+            Call ResetRefresh()
+        End If
+    End Sub
+
+    Private Sub chkCalcNPCBPOs_CheckedChanged(sender As Object, e As EventArgs) Handles chkCalcNPCBPOs.CheckedChanged
         If Not FirstManufacturingGridLoad Then
             FirstLoadCalcBPTypes = True
             cmbCalcBPTypeFilter.Text = "All Types"
@@ -12253,6 +12443,7 @@ CheckTechs:
 
         With UserManufacturingTabSettings
             ' Blueprints
+            chkCalcNPCBPOs.Checked = .CheckBPTypeNPCBPOs
             chkCalcAmmo.Checked = .CheckBPTypeAmmoCharges
             chkCalcBoosters.Checked = .CheckBPTypeBoosters
             chkCalcComponents.Checked = .CheckBPTypeComponents
@@ -12511,6 +12702,7 @@ CheckTechs:
         AllSettings.SaveManufacturingTabColumnSettings(UserManufacturingTabColumnSettings)
 
         With TempSettings
+            .CheckBPTypeNPCBPOs = chkCalcNPCBPOs.Checked
             .CheckBPTypeAmmoCharges = chkCalcAmmo.Checked
             .CheckBPTypeBoosters = chkCalcBoosters.Checked
             .CheckBPTypeComponents = chkCalcComponents.Checked
@@ -13344,6 +13536,11 @@ CheckTechs:
                 btnCalcSaveSettings.Enabled = False
                 btnCalcExportList.Enabled = False
                 gbCalcBPSelect.Enabled = False
+                gbCalcIncludeItems.Enabled = False
+                gbCalcBPRace.Enabled = False
+                gbCalcBPType.Enabled = False
+                chkCalcNPCBPOs.Enabled = False
+                gbCalcSizeLimit.Enabled = False
                 gbCalcBPTech.Enabled = False
                 gbCalcCompareType.Enabled = False
                 gbCalcMarketFilters.Enabled = False
@@ -13396,11 +13593,15 @@ CheckTechs:
                     End If
 
                     ' Update the prices
-                    Dim timecheck As Date = Now
                     If Not MH.UpdateESIPriceHistory(UpdateTypeIDs, MarketRegionID) Then
+                        ' Update Failed, don't reload everything
                         Call MsgBox("Price update timed out for some items. Please try again.", vbInformation, Application.ProductName)
                     End If
-
+                    If CancelThreading Then
+                        ' They had a ton of errors
+                        Call MsgBox("You had an excessive amount of errors while attempting to update price history and the process was canceled. Please try again later.", vbCritical, Application.ProductName)
+                        CancelThreading = False
+                    End If
                 End If
 
                 pnlStatus.Text = "Calculating..."
@@ -14145,6 +14346,11 @@ ExitCalc:
         btnCalcExportList.Enabled = True
         gbCalcMarketFilters.Enabled = True
         gbCalcBPSelect.Enabled = True
+        gbCalcIncludeItems.Enabled = True
+        gbCalcBPRace.Enabled = True
+        gbCalcBPType.Enabled = True
+        chkCalcNPCBPOs.Enabled = True
+        gbCalcSizeLimit.Enabled = True
         gbCalcBPTech.Enabled = True
         gbCalcCompareType.Enabled = True
         gbCalcFilter.Enabled = True
@@ -14182,8 +14388,8 @@ ExitCalc:
         Dim rsItems As SQLiteDataReader
 
         SQL = "SELECT SUM(TOTAL_VOLUME_FILLED) FROM MARKET_HISTORY WHERE TYPE_ID = " & CStr(TypeID) & " AND REGION_ID = " & CStr(RegionID) & " "
-        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) >= " & " DateTime('" & Format(DateAdd(DateInterval.Day, -(DaysfromToday + 1), Now.Date), SQLiteDateFormat) & "') "
-        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) < " & " DateTime('" & Format(Now.Date, SQLiteDateFormat) & "') "
+        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) >= " & " DateTime('" & Format(DateAdd(DateInterval.Day, -(DaysfromToday + 1), Date.UtcNow.Date), SQLiteDateFormat) & "') "
+        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) < " & " DateTime('" & Format(Date.UtcNow.Date, SQLiteDateFormat) & "') "
         DBCommand = New SQLiteCommand(SQL, EVEDB.DBREf)
         rsItems = DBCommand.ExecuteReader
 
@@ -14201,8 +14407,8 @@ ExitCalc:
         Dim rsItems As SQLiteDataReader
 
         SQL = "SELECT SUM(TOTAL_ORDERS_FILLED) FROM MARKET_HISTORY WHERE TYPE_ID = " & CStr(TypeID) & " AND REGION_ID = " & CStr(RegionID) & " "
-        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) >= " & " DateTime('" & Format(DateAdd(DateInterval.Day, -(DaysfromToday + 1), Now.Date), SQLiteDateFormat) & "') "
-        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) < " & " DateTime('" & Format(Now.Date, SQLiteDateFormat) & "') "
+        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) >= " & " DateTime('" & Format(DateAdd(DateInterval.Day, -(DaysfromToday + 1), Date.UtcNow.Date), SQLiteDateFormat) & "') "
+        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) < " & " DateTime('" & Format(Date.UtcNow.Date, SQLiteDateFormat) & "') "
         DBCommand = New SQLiteCommand(SQL, EVEDB.DBREf)
         rsItems = DBCommand.ExecuteReader
 
@@ -14219,7 +14425,7 @@ ExitCalc:
         Dim SQL As String
         Dim rsItems As SQLiteDataReader
 
-        SQL = "SELECT IS_BUY_ORDER, SUM(VOLUME_REMAINING) FROM MARKET_ORDERS WHERE TYPE_ID = " & CStr(TypeID) & " AND REGION_ID = " & CStr(RegionID) & " "
+        SQL = "SELECT IS_BUY_ORDER, SUM(VOLUME_REMAINING) FROM (SELECT * FROM MARKET_ORDERS UNION ALL SELECT * FROM STRUCTURE_MARKET_ORDERS) WHERE TYPE_ID = " & CStr(TypeID) & " AND REGION_ID = " & CStr(RegionID) & " "
         SQL = SQL & "GROUP BY IS_BUY_ORDER"
         DBCommand = New SQLiteCommand(SQL, EVEDB.DBREf)
         rsItems = DBCommand.ExecuteReader
@@ -14738,6 +14944,7 @@ ExitCalc:
         Dim TempRace As String = ""
         Dim RaceClause As String = ""
         Dim SizesClause As String = ""
+        Dim NPCBPOsClause As String = ""
 
         Dim SQL As String = ""
         Dim T2Query As String = ""
@@ -14965,6 +15172,10 @@ ExitCalc:
             SizesClause = " AND SIZE_GROUP IN (" & SizesClause.Substring(0, Len(SizesClause) - 1) & ") "
         End If
 
+        If chkCalcNPCBPOs.Checked Then
+            NPCBPOsClause = " AND NPC_BPO = 1 AND ITEM_TYPE <> 2 " ' Take T2 bps off the list too if they select only NPC even though they show up on the market, no NPC sells them
+        End If
+
         ' Flag for favorites 
         If rbtnCalcBPFavorites.Checked Then
             WhereClause = "WHERE FAVORITE = 1 AND "
@@ -14973,7 +15184,7 @@ ExitCalc:
         End If
 
         ' Add all the items to the where clause
-        WhereClause = WhereClause & RaceClause & " AND (" & ItemTypes & ") AND (((" & ItemTypeNumbers & ") " & T2Query & T3Query & "))" & SizesClause & ComboType & " "
+        WhereClause = WhereClause & RaceClause & " AND (" & ItemTypes & ") AND (((" & ItemTypeNumbers & ") " & T2Query & T3Query & "))" & SizesClause & ComboType & NPCBPOsClause & " "
 
         ' Finally add on text if they added it
         If Trim(txtCalcItemFilter.Text) <> "" Then
@@ -15484,8 +15695,8 @@ ExitCalc:
 
         ' Now get all the prices for the time period
         SQL = "SELECT PRICE_HISTORY_DATE, AVG_PRICE FROM MARKET_HISTORY WHERE TYPE_ID = " & CStr(TypeID) & " AND REGION_ID = " & CStr(RegionID) & " "
-        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) >= " & " DateTime('" & Format(DateAdd(DateInterval.Day, -(DaysfromToday + 1), Now.Date), SQLiteDateFormat) & "') "
-        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) < " & " DateTime('" & Format(Now.Date, SQLiteDateFormat) & "') "
+        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) >= " & " DateTime('" & Format(DateAdd(DateInterval.Day, -(DaysfromToday + 1), Date.UtcNow.Date), SQLiteDateFormat) & "') "
+        SQL = SQL & "AND DATETIME(PRICE_HISTORY_DATE) < " & " DateTime('" & Format(Date.UtcNow.Date, SQLiteDateFormat) & "') "
         SQL = SQL & "ORDER BY PRICE_HISTORY_DATE ASC"
         DBCommand = New SQLiteCommand(SQL, EVEDB.DBREf)
         rsMarketHistory = DBCommand.ExecuteReader
@@ -21179,7 +21390,7 @@ Leave:
             chkMineRorqDeployedMode.ForeColor = Color.Black
         Else
             ' Inactive
-            chkMineRorqDeployedMode.Text = "Industrial Core Inctive"
+            chkMineRorqDeployedMode.Text = "Industrial Core Inactive"
             chkMineRorqDeployedMode.ForeColor = Color.Black
         End If
 
@@ -21270,7 +21481,6 @@ Leave:
         End Function
 
     End Class
-
 
 #End Region
 

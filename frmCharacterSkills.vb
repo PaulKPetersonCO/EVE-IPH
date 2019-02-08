@@ -1,11 +1,9 @@
 ﻿
-Imports System.Data.SQLite
-
 Public Class frmCharacterSkills
 
     Private AllowSkillOverride As Boolean
-    Private OverrideSkills As New EVESkillList ' To save all the skills we are working with here
-    Private UpdateSkills As New EVESkillList ' The list of the ones we want to update only
+    Private OverrideSkills As New EVESkillList(UserApplicationSettings.UseActiveSkillLevels) ' To save all the skills we are working with here
+    Private UpdateSkills As New EVESkillList(UserApplicationSettings.UseActiveSkillLevels) ' The list of the ones we want to update only
     'Private SelectedNode As TreeNode
     Private SelectedSkill As EVESkill
 
@@ -248,7 +246,7 @@ Public Class frmCharacterSkills
 
     ' Loads the tree with the skills
     Private Sub LoadSkillsInTree(ByVal LoadAllSkillsforOverride As Boolean)
-        Dim TempSkills As New EVESkillList
+        Dim TempSkills As New EVESkillList(UserApplicationSettings.UseActiveSkillLevels)
         Dim SkillGroup As String = ""
         Dim CurrentNode As TreeNode = Nothing
         Dim CurrentSubNode As TreeNode = Nothing
@@ -260,10 +258,12 @@ Public Class frmCharacterSkills
         Me.Cursor = Cursors.WaitCursor
 
         ' Reset these every new load
-        OverrideSkills = New EVESkillList
-        UpdateSkills = New EVESkillList
+        OverrideSkills = New EVESkillList(UserApplicationSettings.UseActiveSkillLevels)
+        UpdateSkills = New EVESkillList(UserApplicationSettings.UseActiveSkillLevels)
 
         lblCharacterName.Text = SelectedCharacter.Name
+
+        ' If they want max alpha, load those skills into the selected character (dummy)
 
         ' Load whatever is in the database
         Call SelectedCharacter.Skills.LoadCharacterSkills(SelectedCharacter.ID, SelectedCharacter.CharacterTokenData, LoadAllSkillsforOverride)
@@ -292,13 +292,12 @@ Public Class frmCharacterSkills
                             TempSkillLevel = .Level
                         End If
 
-
                         If TempSkillLevel <> 0 Or (TempSkillLevel = 0 And chkSkillOverride.Checked = True) Then
                             CurrentSubNode = CurrentNode.Nodes.Add(.Name & " - " & CStr(TempSkillLevel))
                         End If
 
                         ' Save the current skills
-                        OverrideSkills.InsertSkill(.TypeID, .Level, 0, .Overridden, .OverriddenLevel)
+                        OverrideSkills.InsertSkill(.TypeID, .Level, .TrainedLevel, .ActiveLevel, 0, .Overridden, .OverriddenLevel)
 
                         ' Save the skill here if it's level 5
                         If chkAllLevel5.Checked Then
@@ -377,7 +376,7 @@ Public Class frmCharacterSkills
         OverrideSkills.UpdateSkill(SelectedSkill)
         ' Save it in the update list for later as we would insert it into the DB (so swap overridden and skill level)
         With SelectedSkill
-            UpdateSkills.InsertSkill(.TypeID, .OverriddenLevel, .SkillPoints, .Overridden, .Level)
+            UpdateSkills.InsertSkill(.TypeID, .OverriddenLevel, .TrainedLevel, .ActiveLevel, .SkillPoints, .Overridden, .TrainedLevel)
         End With
 
         ' They just changed a skill

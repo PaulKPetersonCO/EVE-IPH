@@ -36,6 +36,7 @@ Public Class Blueprint
     '       o	No Tax, Broker Fee
     '   •	Sell - When you Sell to a buy order (simple sell), you only pay taxes. (This will be Max buy)
     '       o 	Tax, No Broker Fee
+
     Private Taxes As Double ' See Above - Sell Order or Sell
     Private DisplayTaxes As Double ' Public updatable number for display updates, for easy updates when clicked
     Private BrokerFees As Double ' See above - Sell Order or Buy Order
@@ -90,13 +91,13 @@ Public Class Blueprint
     Private BPRawMats As Materials
 
     ' Skills required to make it
-    Private ReqBuildSkills As New EVESkillList ' Just this BP
-    Private ReqBuildComponentSkills As New EVESkillList ' All the skills to build just the components
+    Private ReqBuildSkills As New EVESkillList(UserApplicationSettings.UseActiveSkillLevels) ' Just this BP
+    Private ReqBuildComponentSkills As New EVESkillList(UserApplicationSettings.UseActiveSkillLevels) ' All the skills to build just the components
 
     ' Invention variables
     Private MaxRunsPerBP As Integer ' The max runs for a copy or invented bpc. Zero is unlimited runs
-    Private ReqInventionSkills As New EVESkillList ' For inventing this BP
-    Private ReqCopySkills As New EVESkillList ' For copying the BPC
+    Private ReqInventionSkills As New EVESkillList(UserApplicationSettings.UseActiveSkillLevels) ' For inventing this BP
+    Private ReqCopySkills As New EVESkillList(UserApplicationSettings.UseActiveSkillLevels) ' For copying the BPC
     Public InventionMaterials As Materials
     Public CopyMaterials As Materials ' Some copies require items
     Private InventionChance As Double
@@ -201,9 +202,13 @@ Public Class Blueprint
             Else
                 BlueprintRace = 0
             End If
-            ItemVolume = readerBP.GetDouble(15) * PortionSize ' Ammo, blocks, bombs, etc have more items per run
+            If Not readerBP.IsDBNull(15) Then
+                ItemVolume = readerBP.GetDouble(15) * PortionSize ' Ammo, blocks, bombs, etc have more items per run
+            Else
+                ItemVolume = 10
+            End If
         Else
-            Exit Sub
+                Exit Sub
         End If
 
         readerBP.Close()
@@ -763,7 +768,7 @@ Public Class Blueprint
 
         ' Recursion variables
         Dim ComponentBlueprint As Blueprint = Nothing
-        Dim TempSkills As New EVESkillList
+        Dim TempSkills As New EVESkillList(BPUserSettings.UseActiveSkillLevels)
 
         ' The current material we are working with
         Dim CurrentMaterial As Material
@@ -795,7 +800,7 @@ Public Class Blueprint
             CurrentMaterialCategory = readerBP.GetString(4)
             If CurrentMaterialCategory = "Skill" Then
                 ' It's a skill, so just add it to the main list of BP skills
-                ReqBuildSkills.InsertSkill(readerBP.GetInt64(1), readerBP.GetInt32(2), 0, False, 0, "", Nothing, True)
+                ReqBuildSkills.InsertSkill(readerBP.GetInt64(1), readerBP.GetInt32(2), readerBP.GetInt32(2), readerBP.GetInt32(2), 0, False, 0, "", Nothing, True)
 
             ElseIf AddMaterial(CurrentMaterialCategory, readerBP.GetString(10), IgnoreMinerals, IgnoreT1Item) Then
 
@@ -1548,12 +1553,16 @@ Public Class Blueprint
             JobFee = JobFee * MainManufacturingFacility.CostMultiplier
 
             ' facilityUsage = jobFee * taxRate
-            FacilityUsage = JobFee * MainManufacturingFacility.TaxRate
+            If BPUserSettings.AlphaAccount Then
+                FacilityUsage = JobFee * (MainManufacturingFacility.TaxRate + AlphaAccountTaxRate)
+            Else
+                FacilityUsage = JobFee * MainManufacturingFacility.TaxRate
+            End If
 
             ' totalInstallationCost = jobFee + facilityUsage
             ManufacturingFacilityUsage = (JobFee + FacilityUsage) * FWManufacturingCostBonus
-        Else
-            ManufacturingFacilityUsage = 0
+            Else
+                ManufacturingFacilityUsage = 0
         End If
 
     End Sub
@@ -1801,6 +1810,20 @@ Public Class Blueprint
                 InventionMaterials.InsertMaterial(SingleInventionMats.GetMaterialList(i))
             Next
 
+            ' Insert the BPC used
+            If TechLevel = BPTechLevel.T2 Then
+                SQL = "SELECT typeName FROM INVENTORY_TYPES WHERE typeID = " & CStr(InventionBPCTypeID)
+
+                DBCommand = New SQLiteCommand(SQL, EVEDB.DBREf)
+                readerBP = DBCommand.ExecuteReader()
+                readerBP.Read()
+
+                If Not IsNothing(readerBP.GetValue(0)) Then
+                    Dim TempMat = New Material(InventionBPCTypeID, readerBP.GetString(0) & " Copy", "Blueprint", 1, 0.1, 0, "", "")
+                    InventionMaterials.InsertMaterial(TempMat)
+                End If
+            End If
+
             TotalInventionCost = InventionMaterials.GetTotalMaterialsCost
 
         End If
@@ -1843,7 +1866,7 @@ Public Class Blueprint
         Dim SQL As String
 
         Dim EncryptionSkillLevel As Integer
-        Dim DatacoreSkillLevels As New List(Of Integer) ' 
+        Dim InventionSkillLevels As New List(Of Integer) ' 
 
         ' Get the base invention chance from the activities for the T1 BPO
         SQL = "SELECT probability FROM INDUSTRY_ACTIVITY_PRODUCTS WHERE blueprintTypeID = " & InventionBPCTypeID
@@ -1861,33 +1884,22 @@ Public Class Blueprint
 
         ' Pull out the invention skills
         For i = 0 To ReqInventionSkills.GetSkillList.Count - 1
-            SQL = "SELECT typeName FROM INVENTORY_TYPES WHERE typeID =" & ReqInventionSkills.GetSkillList(i).TypeID
-
-            DBCommand = New SQLiteCommand(SQL, EVEDB.DBREf)
-            readerLookup = DBCommand.ExecuteReader()
-            readerLookup.Read()
-
             ' Look up the level of the character's skills
-            If CStr(readerLookup(0).ToString).Contains("Encryption") Then
+            If ReqInventionSkills.GetSkillList(i).Name.Contains("Encryption") Then
                 EncryptionSkillLevel = BPCharacter.Skills.GetSkillLevel(ReqInventionSkills.GetSkillList(i).TypeID)
-            ElseIf (readerLookup(0).ToString <> "Capital Ship Construction") Then
-                ' A datacore skill
-                DatacoreSkillLevels.Add(BPCharacter.Skills.GetSkillLevel(ReqInventionSkills.GetSkillList(i).TypeID))
+            Else
+                ' A datacore or supporting skill (i.e. cap ship construction)
+                InventionSkillLevels.Add(BPCharacter.Skills.GetSkillLevel(ReqInventionSkills.GetSkillList(i).TypeID))
             End If
-
-            readerLookup.Close()
-
-            readerLookup = Nothing
-            DBCommand = Nothing
         Next
 
         If Not UseTypical Then
-            Dim TotalScienceSkillLevels As Integer = 0
-            For Each skill In DatacoreSkillLevels
-                TotalScienceSkillLevels += skill
+            Dim TotalInventionSkillLevels As Integer = 0
+            For Each skill In InventionSkillLevels
+                TotalInventionSkillLevels += skill
             Next
             ' BaseChance * [ 1 + (((ScienceSkill1 + ScienceSkill2 + ...) / 30) + (EncryptionSkill / 40 ))]
-            InventionChance = BaseInventionChance * (1 + (TotalScienceSkillLevels / 30) + (EncryptionSkillLevel / 40)) * InventionDecryptor.ProductionMod
+            InventionChance = BaseInventionChance * (1 + (TotalInventionSkillLevels / 30) + (EncryptionSkillLevel / 40)) * InventionDecryptor.ProductionMod
             '(1 + (0.01 * EncryptionSkillLevel) + (0.02 * (DatacoreSkillLevels(0) + DatacoreSkillLevels(1)))) * InventionDecryptor.ProductionMod
         Else
             ' Just use typical invention costs - ie, all level 4 skills
@@ -1907,8 +1919,8 @@ Public Class Blueprint
         ' facilityUsage = (jobFee) * taxRate
         Dim InventionFacilityTax As Double = InventionJobFee * InventionFacility.TaxRate
 
-        ' totalInstallationCost = jobFee + facilityTax
-        Return (InventionJobFee + InventionFacilityTax) * FWInventionCostBonus
+        ' totalInstallationCost = jobFee + facilityTax * bonus for FW and invention facility
+        Return (InventionJobFee + InventionFacilityTax) * FWInventionCostBonus * InventionFacility.CostMultiplier
 
     End Function
 
@@ -1953,8 +1965,8 @@ Public Class Blueprint
         ' facilityUsage = jobFee * taxRate
         Dim CopyFacilityTax As Double = CopyJobFee * CopyFacility.TaxRate
 
-        ' totalInstallationCost = jobFee +  facilityTax
-        Return (CopyJobFee + CopyFacilityTax) * FWCopyingCostBonus
+        ' totalInstallationCost = jobFee +  facilityTax * bonus for FW and copy facility
+        Return (CopyJobFee + CopyFacilityTax) * FWCopyingCostBonus * CopyFacility.CostMultiplier
 
     End Function
 
@@ -1999,7 +2011,7 @@ Public Class Blueprint
 
         ' Just add all the skills and levels
         While readerItems.Read
-            ReqInventionSkills.InsertSkill(readerItems.GetInt64(0), readerItems.GetInt32(1), 0, False, 0, "", Nothing, True)
+            ReqInventionSkills.InsertSkill(readerItems.GetInt64(0), readerItems.GetInt32(1), readerItems.GetInt32(1), readerItems.GetInt32(1), 0, False, 0, "", Nothing, True)
         End While
 
         readerItems.Close()
@@ -2024,7 +2036,7 @@ Public Class Blueprint
 
         ' Just add all the skills and levels
         While readerItems.Read
-            ReqCopySkills.InsertSkill(readerItems.GetInt64(0), readerItems.GetInt32(1), 0, False, 0, "", Nothing, True)
+            ReqCopySkills.InsertSkill(readerItems.GetInt64(0), readerItems.GetInt32(1), readerItems.GetInt32(1), readerItems.GetInt32(1), 0, False, 0, "", Nothing, True)
         End While
 
         readerItems.Close()
