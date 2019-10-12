@@ -23,15 +23,15 @@ Public Class Material
 
     Private ItemType As Integer ' My item type value
 
-    Public Sub New(ByVal SentTypeID As Long, ByVal SentTypeName As String, ByVal SentGroupName As String, ByVal SentQuantity As Long, _
-                   ByVal SentVolume As Double, ByVal SentPrice As Double, ByVal SentItemME As String, ByVal SentItemTE As String, _
-                   Optional ByVal SentBuild As Boolean = False, Optional ByVal SentItemType As Integer = 0)
+    Public Sub New(ByVal SentTypeID As Long, ByVal SentTypeName As String, ByVal SentGroupName As String, ByVal SentQuantity As Long,
+                   ByVal SentVolume As Double, ByVal SentPrice As Double, ByVal SentItemME As String, ByVal SentItemTE As String,
+                   Optional ByVal isBuiltItem As Boolean = False, Optional ByVal SentItemType As Integer = 0)
         TypeID = SentTypeID
         TypeName = SentTypeName
         Quantity = SentQuantity
         Volume = SentVolume
         GroupName = SentGroupName
-        BuildItem = SentBuild
+        BuildItem = isBuiltItem
         ItemType = SentItemType
 
         If Trim(SentItemME) <> "" Then
@@ -47,12 +47,11 @@ Public Class Material
         End If
 
         If SentPrice = 0 Then
-            CostPerItem = GetItemCost()
+            CostPerItem = GetItemPrice(TypeID)
         Else
             CostPerItem = SentPrice
         End If
 
-        ' Set the cost and volume
         Call SetTotalCostVolume()
 
     End Sub
@@ -61,27 +60,6 @@ Public Class Material
     Public Function Clone() As Object Implements ICloneable.Clone
         Dim CopyOfMe As New Material(Me.TypeID, Me.TypeName, Me.GroupName, Me.Quantity, Me.Volume, Me.CostPerItem, Me.ItemME, Me.ItemTE, Me.BuildItem, Me.ItemType)
         Return CopyOfMe
-    End Function
-
-    ' Returns Cost of item sent if in price database
-    Private Function GetItemCost() As Double
-        Dim readerCost As SQLiteDataReader
-        Dim SQL As String
-
-        ' Look up the cost for the material
-        SQL = "SELECT PRICE FROM ITEM_PRICES WHERE ITEM_ID =" & TypeID
-
-        DBCommand = New SQLiteCommand(SQL, EVEDB.DBREf)
-        readerCost = DBCommand.ExecuteReader
-
-        If readerCost.Read Then
-            GetItemCost = readerCost.GetDouble(0)
-        Else
-            GetItemCost = 0
-        End If
-
-        readerCost.Close()
-
     End Function
 
     Private Sub SetTotalCostVolume()
@@ -103,6 +81,19 @@ Public Class Material
         Call SetTotalCostVolume()
     End Sub
 
+    ' Sets the Total Cost of the material to the sent cost only if it's built
+    Public Sub SetBuildCostPerItem(ByVal BuildCost As Double)
+        If BuildItem Then
+            CostPerItem = BuildCost
+            Call SetTotalCostVolume()
+        End If
+    End Sub
+
+    ' Sets the name with the sent name
+    Public Sub SetName(ByVal SentName As String)
+        TypeName = SentName
+    End Sub
+
     ' Sets the items ME
     Public Sub SetItemME(ByVal SentME As String)
         ItemME = SentME
@@ -116,14 +107,6 @@ Public Class Material
     ' Sets the item as built
     Public Sub SetBuildItem(ByVal BuildValue As Boolean)
         BuildItem = BuildValue
-    End Sub
-
-    ' Sets the Total Cost of the material to the sent cost only if it's built
-    Public Sub SetBuildCost(ByVal BuildCost As Double)
-        If BuildItem Then
-            CostPerItem = BuildCost
-            Call SetTotalCostVolume()
-        End If
     End Sub
 
     ' Allow setting total cost

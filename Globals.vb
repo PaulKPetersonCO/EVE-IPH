@@ -9,7 +9,7 @@ Imports System.Security.Cryptography
 ' Place to store all public variables and functions
 Public Module Public_Variables
     ' DB name and version
-    Public Const SDEVersion As String = "January_Release_1.0_2019"
+    Public Const SDEVersion As String = "September_Release_1.0_2019"
     Public Const VersionNumber As String = "4.0.*"
 
     Public TestingVersion As Boolean ' This flag will test the test downloads from the server for an update
@@ -354,8 +354,8 @@ Public Module Public_Variables
     ' Returns the tax on an item price only
     Public Function GetSalesTax(ByVal ItemMarketCost As Double) As Double
         Dim Accounting As Integer = SelectedCharacter.Skills.GetSkillLevel(16622)
-        ' Each level of accounting reduces tax by 10% - Starting level with Accounting 0 is 1.5% tax 
-        Return (2.0 - (Accounting * 0.1 * 2.0)) / 100 * ItemMarketCost
+        ' Each level of accounting reduces tax by 11%, Max Sales Tax: 5%, Min Sales Tax: 2.25%
+        Return (5.0 - (Accounting * 0.11 * 5.0)) / 100 * ItemMarketCost
     End Function
 
     ' Returns the tax on setting up a sell order for an item price only
@@ -363,9 +363,9 @@ Public Module Public_Variables
         Dim BrokerRelations As Integer = SelectedCharacter.Skills.GetSkillLevel(3446)
 
         Dim TempFee As Double
-        ' 3%-(0.1%*BrokerRelationsLevel)-(0.03%*FactionStanding)-(0.02%*CorpStanding) - uses unmodified standings
+        ' 5%-(0.3%*BrokerRelationsLevel)-(0.03%*FactionStanding)-(0.02%*CorpStanding) - uses unmodified standings
         ' https://support.eveonline.com/hc/en-us/articles/203218962-Broker-Fee-and-Sales-Tax
-        Dim BrokerTax = 3.0 - (0.1 * BrokerRelations) - (0.03 * UserApplicationSettings.BrokerFactionStanding) - (0.02 * UserApplicationSettings.BrokerCorpStanding)
+        Dim BrokerTax = 5.0 - (0.3 * BrokerRelations) - (0.03 * UserApplicationSettings.BrokerFactionStanding) - (0.02 * UserApplicationSettings.BrokerCorpStanding)
         TempFee = (BrokerTax / 100) * ItemMarketCost
 
         If TempFee < 100 Then
@@ -769,7 +769,36 @@ InvalidDate:
 
     End Function
 
+    ' Returns the price of the typeID sent in item_prices
+    Public Function GetItemPrice(ByVal TypeID As Long) As Double
+        Dim readerCost As SQLiteDataReader
+        Dim SQL As String
+        Dim ItemPrice As Double = 0
+
+        ' Look up the cost for the material
+        SQL = "SELECT PRICE FROM ITEM_PRICES WHERE ITEM_ID =" & TypeID
+
+        DBCommand = New SQLiteCommand(SQL, EVEDB.DBREf)
+        readerCost = DBCommand.ExecuteReader
+
+        If readerCost.Read Then
+            ItemPrice = readerCost.GetDouble(0)
+        End If
+
+        readerCost.Close()
+        Return ItemPrice
+
+    End Function
+
     ' Sorts the reference listview and column
+    ''' <summary>
+    ''' 
+    ''' </summary>
+    ''' <param name="ColumnIndex"></param>
+    ''' <param name="RefListView"></param>
+    ''' <param name="ListPrevColumnClicked"></param>
+    ''' <param name="ListPrevColumnSortOrder"></param>
+    ''' <param name="UseSentSortType"></param>
     Public Sub ListViewColumnSorter(ByVal ColumnIndex As Integer, ByRef RefListView As ListView, ByRef ListPrevColumnClicked As Integer, ByRef ListPrevColumnSortOrder As SortOrder,
                                     Optional UseSentSortType As Boolean = False)
         Dim SortType As SortOrder
@@ -802,6 +831,10 @@ InvalidDate:
         End If
 
         ' Perform the sort with these new sort options.
+        If ColumnIndex > RefListView.Columns.Count - 1 Then
+            ColumnIndex = 0
+        End If
+
         RefListView.ListViewItemSorter = New ListViewItemComparer(ColumnIndex, SortType)
         RefListView.Sort()
 
@@ -913,6 +946,26 @@ InvalidDate:
 
     End Function
 
+    Public Function UpdateItemNamewithRuns(ByVal ItemName As String, ByVal Runs As Long) As String
+        ' Update built item name with runs we did to get this quantity
+        ' Reset item name for found item
+        If ItemName.Contains("(") Then
+            ItemName = Trim(ItemName.Substring(0, InStr(ItemName, "(") - 1))
+        End If
+
+        Return ItemName & " (Runs: " & CStr(Runs) & ")"
+
+    End Function
+
+    ' Strips off the Runs if it is on the name
+    Public Function RemoveItemNameRuns(ByVal ItemName As String) As String
+        If ItemName.Contains("(Runs:") Then
+            Return Trim(ItemName.Substring(0, InStr(ItemName, "(") - 2))
+        Else
+            Return ItemName
+        End If
+    End Function
+
     ' Imports sent blueprint to shopping list
     Public Sub AddToShoppingList(SentBlueprint As Blueprint, BuildBuy As Boolean, CopyRawMats As Boolean, SLFacility As IndustryFacility,
                                  IgnoreInvention As Boolean, IgnoreMinerals As Boolean, IgnoreT1ITem As Boolean,
@@ -936,6 +989,7 @@ InvalidDate:
                     .ManufacturingFacilityType = SLFacility.GetFacilityTypeDescription
                     .ManufacturingFacilityLocation = SentBlueprint.GetManufacturingFacility.FacilityName
                     .ManufacturingFacilityBuildType = SentBlueprint.GetManufacturingFacility.FacilityProductionType
+                    .PortionSize = SentBlueprint.GetPortionSize
 
                     ' See if we need to add the system on to the end of the build location for POS
                     If .ManufacturingFacilityType = ManufacturingFacility.POSFacility Then
@@ -980,6 +1034,7 @@ InvalidDate:
                     .ManufacturingFacilityType = SLFacility.GetFacilityTypeDescription
                     .ManufacturingFacilityLocation = SentBlueprint.GetManufacturingFacility.FacilityName
                     .ManufacturingFacilityBuildType = SentBlueprint.GetManufacturingFacility.FacilityProductionType
+                    .PortionSize = SentBlueprint.GetPortionSize
 
                     ' See if we need to add the system on to the end of the build location for POS
                     If .ManufacturingFacilityType = ManufacturingFacility.POSFacility Then
@@ -1072,6 +1127,14 @@ InvalidDate:
         TotalShoppingList.InsertShoppingItem(ShoppingItem, ShoppingBuildList, ShoppingBuyList)
 
     End Sub
+
+    Public Function IsReaction(ByVal ItemGroupID As Integer) As Boolean
+        If ItemGroupID = ItemIDs.ReactionBiochmeicalsGroupID Or ItemGroupID = ItemIDs.ReactionCompositesGroupID Or ItemGroupID = ItemIDs.ReactionPolymersGroupID Or ItemGroupID = ItemIDs.ReactionsIntermediateGroupID Then
+            Return True
+        Else
+            Return False
+        End If
+    End Function
 
     ' Enables Cut, Copy, Paste, and Select all from shortcut key entry for the sent text box
     Public Function ProcessCutCopyPasteSelect(SentBox As TextBox, e As System.Windows.Forms.KeyEventArgs) As Boolean
@@ -1716,7 +1779,6 @@ InvalidDate:
             ' Refresh the lists
             Call frmShop.RefreshLists()
         End If
-
     End Sub
 
     ' Deletes all the public structures from the stations table
