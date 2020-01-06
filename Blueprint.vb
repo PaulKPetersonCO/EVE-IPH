@@ -718,22 +718,13 @@ Public Class Blueprint
                         .BuildMaterials = CType(ComponentBlueprint.RawMaterials, Materials)
 
                         ' Set the variables
-                        .FacilityMEModifier = ComponentBlueprint.MainManufacturingFacility.MaterialMultiplier ' Save MM used on component
-                        .FacilityType = ComponentBlueprint.MainManufacturingFacility.GetFacilityTypeDescription
-                        .FacilityBuildType = ComponentBlueprint.MainManufacturingFacility.FacilityProductionType
+                        .ManufacturingFacility = ComponentBlueprint.MainManufacturingFacility
                         .IncludeActivityCost = ComponentBlueprint.MainManufacturingFacility.IncludeActivityCost
                         .IncludeActivityTime = ComponentBlueprint.MainManufacturingFacility.IncludeActivityTime
                         .IncludeActivityUsage = ComponentBlueprint.MainManufacturingFacility.IncludeActivityUsage
 
-                        ' See if we need to add the system on to the end of the build location for POS
-                        If BuiltComponentList.GetBuiltItemList(i).FacilityType = ManufacturingFacility.POSFacility Then
-                            BuiltComponentList.GetBuiltItemList(i).FacilityLocation = ComponentBlueprint.MainManufacturingFacility.FacilityName & " (" & ComponentBlueprint.GetManufacturingFacility.SolarSystemName & ")"
-                        Else
-                            BuiltComponentList.GetBuiltItemList(i).FacilityLocation = ComponentBlueprint.MainManufacturingFacility.FacilityName
-                        End If
 
                         Dim ItemPrice As Double = 0
-
                         Dim OwnedBP As Boolean
 
                         Call GetMETEforBP(ComponentBlueprint.BlueprintID, ComponentBlueprint.TechLevel, BPUserSettings.DefaultBPME, BPUserSettings.DefaultBPTE, OwnedBP)
@@ -751,7 +742,7 @@ Public Class Blueprint
                             ' Market cost is greater than build cost, so set the mat cost to the build cost
                             ItemPrice = ComponentBlueprint.GetRawMaterials.GetTotalMaterialsCost / .ItemQuantity
                             ' Adjust the runs of this BP in the name for built bps
-                            .ItemName &= " (Runs: " & CStr(ComponentBlueprint.GetUserRuns) & ")"
+                            .ItemName = UpdateItemNamewithRuns(.ItemName, ComponentBlueprint.GetUserRuns)
                         Else
                             ' Buying item
                             ItemPrice = MarketPrice
@@ -882,21 +873,21 @@ Public Class Blueprint
 
                 ' Set the quantity: required = max(runs,ceil(round(runs * baseQuantity * materialModifier,2))
                 CurrentMatQuantity = CLng(Math.Max(UserRuns, Math.Ceiling(Math.Round(UserRuns * CurrentMaterial.GetQuantity * SetBPMaterialModifier(), 2))))
+                ' Update the quantity - just add the negative percent of the ME modifier to 1 and multiply
+                Call CurrentMaterial.SetQuantity(CurrentMatQuantity)
 
+                Dim AdjCurrentMatQuantity As Long = CurrentMatQuantity
                 ' Before going any further, see if we have this material in excess materials and if so, adjust the quantity in excess and either build the remaining or exit this material processing
-                SaveExcessMats = UseExcessMaterials(ExcessBuiltItems, CurrentMaterial, CurrentMatQuantity)
+                SaveExcessMats = UseExcessMaterials(ExcessBuiltItems, CurrentMaterial, AdjCurrentMatQuantity)
 
                 If Not IsDBNull(readerBP.GetValue(11)) Then
                     ComponentBPPortionSize = readerBP.GetInt64(11)
                     ' Divide by the portion size if this item has one (component buildable) for the build quantity
-                    BuildQuantity = CLng(Math.Ceiling(CurrentMatQuantity / ComponentBPPortionSize))
+                    BuildQuantity = CLng(Math.Ceiling(AdjCurrentMatQuantity / ComponentBPPortionSize))
                 Else
-                    BuildQuantity = CurrentMatQuantity
+                    BuildQuantity = AdjCurrentMatQuantity
                     ComponentBPPortionSize = 1
                 End If
-
-                ' Update the quantity - just add the negative percent of the ME modifier to 1 and multiply
-                Call CurrentMaterial.SetQuantity(CurrentMatQuantity)
 
                 Dim UsesReactions As Boolean = False
                 ' See what material type this is and if we want to build it (reactions)
@@ -1038,7 +1029,7 @@ Public Class Blueprint
                             CurrentMaterial.SetBuildCostPerItem(SingleRunBuildCost)
 
                             ' Set the name of the material to include the build runs
-                            CurrentMaterial.SetName(CurrentMaterial.GetMaterialName & " (Runs: " & CStr(BuildQuantity) & ")")
+                            CurrentMaterial.SetName(UpdateItemNamewithRuns(CurrentMaterial.GetMaterialName, BuildQuantity))
 
                             ' Save the item built, it's ME and the materials it used
                             Dim TempBuiltItem As New BuiltItem
@@ -1115,7 +1106,7 @@ Public Class Blueprint
                         End Select
 
                         ' Set the name of the material to include the build runs
-                        CurrentMaterial.SetName(CurrentMaterial.GetMaterialName & " (Runs: " & CStr(BuildQuantity) & ")")
+                        CurrentMaterial.SetName(UpdateItemNamewithRuns(CurrentMaterial.GetMaterialName, BuildQuantity))
 
                         ' Insert the existing component that we are using into the component list as set in the original BP
                         ComponentMaterials.InsertMaterial(CurrentMaterial)
@@ -1274,19 +1265,10 @@ Public Class Blueprint
         TempBuiltItem.PortionSize = PortionSize
 
         TempBuiltItem.BuildMaterials = RefBlueprint.GetRawMaterials
-        TempBuiltItem.FacilityMEModifier = RefBlueprint.MainManufacturingFacility.MaterialMultiplier ' Save MM used on component
-        TempBuiltItem.FacilityType = RefBlueprint.MainManufacturingFacility.GetFacilityTypeDescription
-        TempBuiltItem.FacilityBuildType = RefBlueprint.MainManufacturingFacility.FacilityProductionType
+        TempBuiltItem.ManufacturingFacility = RefBlueprint.MainManufacturingFacility
         TempBuiltItem.IncludeActivityCost = RefBlueprint.MainManufacturingFacility.IncludeActivityCost
         TempBuiltItem.IncludeActivityTime = RefBlueprint.MainManufacturingFacility.IncludeActivityTime
         TempBuiltItem.IncludeActivityUsage = RefBlueprint.MainManufacturingFacility.IncludeActivityUsage
-
-        ' See if we need to add the system on to the end of the build location for POS
-        If TempBuiltItem.FacilityType = ManufacturingFacility.POSFacility Then
-            TempBuiltItem.FacilityLocation = RefBlueprint.MainManufacturingFacility.FacilityName & " (" & RefBlueprint.GetManufacturingFacility.SolarSystemName & ")"
-        Else
-            TempBuiltItem.FacilityLocation = RefBlueprint.MainManufacturingFacility.FacilityName
-        End If
 
         Return TempBuiltItem
 

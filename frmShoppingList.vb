@@ -1,6 +1,11 @@
 ﻿
 Imports System.Data.SQLite
 Imports System.IO
+Imports System.Net
+Imports System.Text
+Imports System.Collections.Specialized
+Imports System.Threading
+Imports Newtonsoft.Json
 
 Public Class frmShoppingList
 
@@ -531,13 +536,13 @@ Public Class frmShoppingList
                 Else
                     lstItem.SubItems.Add(ItemList(i).Name & " (" & ItemList(i).Relic & ")") ' Add relic name after the item
                 End If
-                lstItem.SubItems.Add(CStr(FormatNumber(ItemList(i).Quantity, 0)))
+                lstItem.SubItems.Add(CStr(FormatNumber(ItemList(i).Runs, 0)))
                 lstItem.SubItems.Add(CStr(ItemList(i).ItemME))
                 lstItem.SubItems.Add(CStr(ItemList(i).NumBPs))
                 lstItem.SubItems.Add(ItemList(i).BuildType)
                 lstItem.SubItems.Add(ItemList(i).Decryptor)
-                lstItem.SubItems.Add(ItemList(i).ManufacturingFacilityLocation)
-                lstItem.SubItems.Add(CStr(ItemList(i).ManufacturingFacilityType))
+                lstItem.SubItems.Add(ItemList(i).ManufacturingFacility.FacilityName)
+                lstItem.SubItems.Add(CStr(ItemList(i).ManufacturingFacility.FacilityType))
                 lstItem.SubItems.Add(CStr(ItemList(i).IgnoredInvention))
                 lstItem.SubItems.Add(CStr(ItemList(i).IgnoredMinerals))
                 lstItem.SubItems.Add(CStr(ItemList(i).IgnoredT1BaseItem))
@@ -545,7 +550,7 @@ Public Class frmShoppingList
                 lstItem.SubItems.Add(CStr(ItemList(i).IncludeActivityTime))
                 lstItem.SubItems.Add(CStr(ItemList(i).IncludeActivityUsage))
                 lstItem.SubItems.Add(CStr(ItemList(i).ItemTE))
-                lstItem.SubItems.Add(CStr(ItemList(i).ManufacturingFacilityBuildType))
+                lstItem.SubItems.Add(CStr(ItemList(i).ManufacturingFacility.FacilityProductionType))
             End With
         Next
 
@@ -585,13 +590,13 @@ Public Class frmShoppingList
                     lstBuildItem.SubItems.Add(CStr(FormatNumber(BuildItems.GetBuiltItemList(i).ItemQuantity, 0)))
                     lstBuildItem.SubItems.Add(CStr(BuildItems.GetBuiltItemList(i).BuildME))
                     lstBuildItem.SubItems.Add(CStr(BuildItems.GetBuiltItemList(i).BuildTE))
-                    lstBuildItem.SubItems.Add(CStr(BuildItems.GetBuiltItemList(i).FacilityLocation))
-                    lstBuildItem.SubItems.Add(CStr(BuildItems.GetBuiltItemList(i).FacilityType))
+                    lstBuildItem.SubItems.Add(CStr(BuildItems.GetBuiltItemList(i).ManufacturingFacility.FacilityName))
+                    lstBuildItem.SubItems.Add(CStr(BuildItems.GetBuiltItemList(i).ManufacturingFacility.FacilityType))
                     lstBuildItem.SubItems.Add(CStr(BuildItems.GetBuiltItemList(i).IncludeActivityCost))
                     lstBuildItem.SubItems.Add(CStr(BuildItems.GetBuiltItemList(i).IncludeActivityTime))
                     lstBuildItem.SubItems.Add(CStr(BuildItems.GetBuiltItemList(i).IncludeActivityUsage))
                     lstBuildItem.SubItems.Add(CStr(BuildItems.GetBuiltItemList(i).BPTypeID)) ' Add the bp type id here for double clicking later
-                    lstBuildItem.SubItems.Add(CStr(BuildItems.GetBuiltItemList(i).FacilityBuildType))
+                    lstBuildItem.SubItems.Add(CStr(BuildItems.GetBuiltItemList(i).ManufacturingFacility.FacilityProductionType))
                 Next
             End If
         End If
@@ -1786,18 +1791,25 @@ Public Class frmShoppingList
         Dim rsBPLookup As SQLiteDataReader
         Dim SQL As String
 
-        SQL = "SELECT BLUEPRINT_ID FROM ALL_BLUEPRINTS WHERE ITEM_ID = " & lstBuild.SelectedItems(0).SubItems(0).Text
+        If lstBuild.SelectedItems.Count <> 0 Then
+            SQL = "SELECT BLUEPRINT_ID, PORTION_SIZE FROM ALL_BLUEPRINTS WHERE ITEM_ID = " & lstBuild.SelectedItems(0).SubItems(0).Text
 
-        DBCommand = New SQLiteCommand(Sql, EVEDB.DBREf)
-        rsBPLookup = DBCommand.ExecuteReader
-        rsBPLookup.Read()
+            DBCommand = New SQLiteCommand(SQL, EVEDB.DBREf)
+            rsBPLookup = DBCommand.ExecuteReader
+            rsBPLookup.Read()
 
-        Call frmMain.LoadBPfromEvent(rsBPLookup.GetInt64(0), "Raw", None, SentFromLocation.ShoppingList,
-                                           Nothing, Nothing, Nothing, Nothing, Nothing,
-                                           UserBPTabSettings.IncludeTaxes, UserBPTabSettings.IncludeFees,
-                                           lstBuild.SelectedItems(0).SubItems(3).Text, lstBuild.SelectedItems(0).SubItems(4).Text,
-                                           lstBuild.SelectedItems(0).SubItems(2).Text, "1", CStr(UserBPTabSettings.LaboratoryLines),
-                                           "1", txtAddlCosts.Text, False) ' Any buildable component here is one 1 bp
+            Dim Runs As Integer = CInt(Math.Ceiling(CInt(lstBuild.SelectedItems(0).SubItems(2).Text) / rsBPLookup.GetInt64(1)))
+
+            Call frmMain.LoadBPfromEvent(rsBPLookup.GetInt64(0), "Raw", None, SentFromLocation.ShoppingList,
+                                               Nothing, Nothing, Nothing, Nothing, Nothing,
+                                               UserBPTabSettings.IncludeTaxes, UserBPTabSettings.IncludeFees,
+                                               lstBuild.SelectedItems(0).SubItems(3).Text, lstBuild.SelectedItems(0).SubItems(4).Text,
+                                               CStr(Runs), "1", CStr(UserBPTabSettings.LaboratoryLines),
+                                               "1", txtAddlCosts.Text, False) ' Any buildable component here is one 1 bp
+
+            rsBPLookup.Close()
+        End If
+
     End Sub
 
     Private Sub lstItems_ColumnClick(sender As Object, e As System.Windows.Forms.ColumnClickEventArgs) Handles lstItems.ColumnClick
@@ -1998,13 +2010,13 @@ Public Class frmShoppingList
                         ShopListItem.Name = SelectedItem
                         ShopListItem.Relic = ""
                     End If
-                    ShopListItem.Quantity = CLng(lstItems.SelectedItems(i).SubItems(2).Text)
+                    ShopListItem.Runs = CLng(lstItems.SelectedItems(i).SubItems(2).Text)
                     ShopListItem.ItemME = CInt(lstItems.SelectedItems(i).SubItems(3).Text)
                     ShopListItem.ItemTE = CInt(CBool(lstItems.SelectedItems(i).SubItems(12).Text))
                     ShopListItem.NumBPs = CInt(lstItems.SelectedItems(i).SubItems(4).Text)
                     ShopListItem.BuildType = lstItems.SelectedItems(i).SubItems(5).Text
                     ShopListItem.Decryptor = lstItems.SelectedItems(i).SubItems(6).Text
-                    ShopListItem.ManufacturingFacilityLocation = lstItems.SelectedItems(i).SubItems(7).Text
+                    ShopListItem.ManufacturingFacility.FacilityName = lstItems.SelectedItems(i).SubItems(7).Text
 
                     ' Remove it from shopping list
                     TotalShoppingList.UpdateShoppingItemQuantity(ShopListItem, 0)
@@ -2043,7 +2055,7 @@ Public Class frmShoppingList
                 TempBuiltItem.ItemName = lstBuild.SelectedItems(i).SubItems(1).Text
                 TempBuiltItem.ItemQuantity = CLng(lstBuild.SelectedItems(i).SubItems(2).Text)
                 TempBuiltItem.BuildME = CInt(lstBuild.SelectedItems(i).SubItems(3).Text)
-                TempBuiltItem.FacilityLocation = lstBuild.SelectedItems(i).SubItems(5).Text
+                TempBuiltItem.ManufacturingFacility.FacilityName = lstBuild.SelectedItems(i).SubItems(5).Text
 
                 ' Remove it from shopping list, sending the grid quantity
                 TotalShoppingList.UpdateShoppingBuiltItemQuantity(TempBuiltItem, 0)
@@ -2308,7 +2320,7 @@ Public Class frmShoppingList
                     TempBuiltItem.ItemName = CurrentRow.SubItems(1).Text
                     TempBuiltItem.ItemQuantity = CLng(CurrentRow.SubItems(2).Text)
                     TempBuiltItem.BuildME = CInt(CurrentRow.SubItems(3).Text)
-                    TempBuiltItem.FacilityLocation = CurrentRow.SubItems(5).Text
+                    TempBuiltItem.ManufacturingFacility.FacilityName = CurrentRow.SubItems(5).Text
 
                     ' Save the built components they probably have on hand to make this change - calc from value in grid vs. value entered
                     Dim OnHandQuantity As Long = CLng(CurrentRow.SubItems(2).Text) - QuantityValue
@@ -2334,14 +2346,14 @@ Public Class frmShoppingList
                         ShopListItem.Name = TempName
                         ShopListItem.Relic = ""
                     End If
-                    ShopListItem.Quantity = CLng(CurrentRow.SubItems(2).Text)
+                    ShopListItem.Runs = CLng(CurrentRow.SubItems(2).Text)
                     ShopListItem.ItemME = CInt(CurrentRow.SubItems(3).Text)
                     ShopListItem.ItemTE = CInt(CurrentRow.SubItems(15).Text)
                     ShopListItem.NumBPs = CInt(CurrentRow.SubItems(4).Text)
                     ShopListItem.BuildType = CurrentRow.SubItems(5).Text
                     ShopListItem.Decryptor = CurrentRow.SubItems(6).Text
-                    ShopListItem.InventedRunsPerBP = CInt(Math.Ceiling(ShopListItem.Quantity / ShopListItem.NumBPs))
-                    ShopListItem.ManufacturingFacilityLocation = CurrentRow.SubItems(7).Text
+                    ShopListItem.InventedRunsPerBP = CInt(Math.Ceiling(ShopListItem.Runs / ShopListItem.NumBPs))
+                    ShopListItem.ManufacturingFacility.FacilityName = CurrentRow.SubItems(7).Text
 
                     ' Update the full shopping list
                     Call TotalShoppingList.UpdateShoppingItemQuantity(ShopListItem, QuantityValue)
@@ -2554,6 +2566,65 @@ Tabs:
         txtListEdit.Hide()
     End Sub
 
+    Private Sub Button1_Click(sender As Object, e As EventArgs) Handles Button1.Click
+        Dim AccessTokenOutput As New ESITokenData
+        Dim Success As Boolean = False
+        Dim WC As New WebClient
+        Dim Response As Byte()
+        Dim Data As String = ""
+        Dim PostParameters As New NameValueCollection
+
+        Try
+
+            ' See if we are in an error limited state
+            If ESIErrorHandler.ErrorLimitReached Then
+                ' Need to wait until we are ready to continue
+                Call Thread.Sleep(ESIErrorHandler.msErrorTimer)
+            End If
+
+            'curl -XPOST "https://evepraisal.com/appraisal/structured.json?market=jita" --data '{"market_name": "jita", "items": [{"name": "Rifter"}, {"type_id": 34}]}'
+
+
+            Response = WC.UploadValues("https://evepraisal.com/appraisal.json?market=dodixie&raw_textarea=basilisk", "POST", PostParameters)
+
+            ' Convert byte data to string
+            Data = Encoding.UTF8.GetString(Response)
+
+            ' Parse the data to the class
+            AccessTokenOutput = JsonConvert.DeserializeObject(Of ESITokenData)(Data)
+            Success = True
+
+        Catch ex As WebException
+
+            Call ESIErrorHandler.ProcessWebException(ex, ESIErrorProcessor.ESIErrorLocation.AccessToken, False)
+
+        Catch ex As Exception
+            Call ESIErrorHandler.ProcessException(ex, ESIErrorProcessor.ESIErrorLocation.AccessToken, False)
+        End Try
+
+
+    End Sub
+
 #End Region
 
+End Class
+
+Public Class EVEPraisal
+    <JsonProperty("appraisal")> Public appraisal As eveappraisal
+End Class
+
+Public Class eveappraisal
+    <JsonProperty("created")> Public created As Double
+    <JsonProperty("id")> Public id As String
+    <JsonProperty("items")> Public items As List(Of eprasialItems)
+    <JsonProperty("market_name")> Public market_name As String
+    <JsonProperty("raw")> Public raw As String
+End Class
+
+Public Class eprasialItems
+    <JsonProperty("appraisal")> Public appraisal As eveappraisal
+    <JsonProperty("method")> Public method As String
+    <JsonProperty("route")> Public route As String
+    <JsonProperty("status")> Public status As String
+    <JsonProperty("tags")> Public tags As List(Of String)
 End Class

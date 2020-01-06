@@ -82,6 +82,7 @@ Partial Class frmShoppingList
         Me.lstBuy = New EVE_Isk_per_Hour.MyListView()
         Me.lstItems = New EVE_Isk_per_Hour.MyListView()
         Me.lstBuild = New EVE_Isk_per_Hour.MyListView()
+        Me.Button1 = New System.Windows.Forms.Button()
         Me.DeleteBuildStrip.SuspendLayout()
         Me.DeleteItemStrip.SuspendLayout()
         Me.DeleteMaterialStrip.SuspendLayout()
@@ -413,7 +414,7 @@ Partial Class frmShoppingList
         'rbtnExportMulitBuy
         '
         Me.rbtnExportMulitBuy.AutoSize = True
-        Me.rbtnExportMulitBuy.Location = New System.Drawing.Point(8, 31)
+        Me.rbtnExportMulitBuy.Location = New System.Drawing.Point(8, 15)
         Me.rbtnExportMulitBuy.Name = "rbtnExportMulitBuy"
         Me.rbtnExportMulitBuy.Size = New System.Drawing.Size(114, 17)
         Me.rbtnExportMulitBuy.TabIndex = 3
@@ -424,7 +425,7 @@ Partial Class frmShoppingList
         'rbtnExportSSV
         '
         Me.rbtnExportSSV.AutoSize = True
-        Me.rbtnExportSSV.Location = New System.Drawing.Point(8, 65)
+        Me.rbtnExportSSV.Location = New System.Drawing.Point(8, 66)
         Me.rbtnExportSSV.Name = "rbtnExportSSV"
         Me.rbtnExportSSV.Size = New System.Drawing.Size(46, 17)
         Me.rbtnExportSSV.TabIndex = 2
@@ -435,7 +436,7 @@ Partial Class frmShoppingList
         'rbtnExportCSV
         '
         Me.rbtnExportCSV.AutoSize = True
-        Me.rbtnExportCSV.Location = New System.Drawing.Point(8, 48)
+        Me.rbtnExportCSV.Location = New System.Drawing.Point(8, 49)
         Me.rbtnExportCSV.Name = "rbtnExportCSV"
         Me.rbtnExportCSV.Size = New System.Drawing.Size(46, 17)
         Me.rbtnExportCSV.TabIndex = 1
@@ -446,7 +447,7 @@ Partial Class frmShoppingList
         'rbtnExportDefault
         '
         Me.rbtnExportDefault.AutoSize = True
-        Me.rbtnExportDefault.Location = New System.Drawing.Point(8, 14)
+        Me.rbtnExportDefault.Location = New System.Drawing.Point(8, 32)
         Me.rbtnExportDefault.Name = "rbtnExportDefault"
         Me.rbtnExportDefault.Size = New System.Drawing.Size(59, 17)
         Me.rbtnExportDefault.TabIndex = 0
@@ -642,12 +643,23 @@ Partial Class frmShoppingList
         Me.lstBuild.UseCompatibleStateImageBehavior = False
         Me.lstBuild.View = System.Windows.Forms.View.Details
         '
+        'Button1
+        '
+        Me.Button1.Location = New System.Drawing.Point(549, 644)
+        Me.Button1.Name = "Button1"
+        Me.Button1.Size = New System.Drawing.Size(168, 28)
+        Me.Button1.TabIndex = 78
+        Me.Button1.Text = "EVEpraisal Test"
+        Me.Button1.UseVisualStyleBackColor = True
+        Me.Button1.Visible = False
+        '
         'frmShoppingList
         '
         Me.AutoScaleDimensions = New System.Drawing.SizeF(96.0!, 96.0!)
         Me.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi
         Me.AutoSize = True
         Me.ClientSize = New System.Drawing.Size(1094, 682)
+        Me.Controls.Add(Me.Button1)
         Me.Controls.Add(Me.lblTotalItemsInList)
         Me.Controls.Add(Me.lblTCC)
         Me.Controls.Add(Me.lblTIC)
@@ -756,4 +768,5 @@ End Sub
     Friend WithEvents lblTotalItemsInList As System.Windows.Forms.Label
     Friend WithEvents chkRebuildItemsfromList As CheckBox
     Friend WithEvents rbtnExportMulitBuy As RadioButton
+    Friend WithEvents Button1 As Button
 End Class
